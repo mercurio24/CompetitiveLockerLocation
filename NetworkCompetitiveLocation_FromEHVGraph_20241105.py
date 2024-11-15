@@ -225,7 +225,7 @@ if __name__ == """__main__""":
     current_file_path = os.path.abspath(__file__)
     current_folder = os.path.dirname(current_file_path)
     graph_path = os.path.dirname(current_folder) + "/RealGraphCreation/eindhoven_with_districts_Binnenstad_Witte Dame_Bergen.graphml"
-    playing_style = 'simultaneous' # 'simultaneous' or 'sequential'
+    playing_style = 'sequential' # 'simultaneous' or 'sequential'
     solution_method = 'RSOC' # 'enumeration' or 'RSOC'
 
     ### Load the graph
