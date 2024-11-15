@@ -293,31 +293,4 @@ if __name__ == """__main__""":
 
     located_lockers = list(chain(*current_actions.values()))
 
-    colors = ['blue', 'orange', 'olive', 'magenta', 'cyan', 'yellow',
-                'purple', 'brown', 'pink', 'green', 'lime', 'navy',
-                'teal', 'maroon', 'aqua', 'fuchsia']
-
-    colors_per_node_with_players = {node: [colors[player] for player in range(number_of_players) if node in current_actions[player]] for node in G.nodes() if node in located_lockers}
-    node_colors = ['red' if data.get('locker_possible') == 'locker' else 'black' for _, data in G.nodes(data=True)]
-    node_sizes = [50 if data.get('locker_possible') == 'locker' else 10 for _, data in G.nodes(data=True)]
-            
-
-    print("Color and size map created")
-
-    ### Plot the graph
-    fig, ax = ox.plot_graph(G, 
-                            node_color=node_colors, 
-                            node_size=node_sizes, 
-                            edge_color='black', 
-                            bgcolor='white', 
-                            show=False, 
-                            close=False)
-    plt.axis("equal")
-    for node, players in colors_per_node_with_players.items():
-        node_position = (G.nodes(data=True)[node]['x'], G.nodes(data=True)[node]['y'])  
-        for idx_player in range(len(players)-1,-1,-1):
-            circle_radius = 2e-4+1.5e-4*idx_player
-            circle_color = players[idx_player]
-            circle = plt.Circle(node_position, circle_radius, color=circle_color, zorder=number_of_players-idx_player)
-            ax.add_patch(circle)
-    plt.show()
+    plot_simulation_state(G, current_actions)
