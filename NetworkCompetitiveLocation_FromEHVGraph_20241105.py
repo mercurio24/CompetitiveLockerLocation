@@ -7,7 +7,7 @@ from itertools import combinations, chain
 import random
 import numpy as np
 import plotly.graph_objects as go
-from time import time as start_timer
+from time import time as current_time
 import gurobipy as grb
 
 random.seed(28)
@@ -65,7 +65,7 @@ def NE_two_players_by_enumeration_check(location_actions, all_pairs_distances, p
     print(f"Symmetric game: {symmetric_flag}")
     NEs_detected = []
     bimatrix_payoffs = {}
-    payoff_computation_time = start_timer()
+    payoff_computation_time = current_time()
     print("Payoffs computation")
     for locations_player_1 in location_actions[0]:
         for locations_player_2 in location_actions[1]:
@@ -75,7 +75,7 @@ def NE_two_players_by_enumeration_check(location_actions, all_pairs_distances, p
                 bimatrix_payoffs[(locations_player_1, locations_player_2)] = (payoff_per_location_decision(locations_player_1, {0: locations_player_1, 1: locations_player_2}, 0, all_pairs_distances, population_per_node, alpha, beta), payoff_per_location_decision(locations_player_2, {0: locations_player_1, 1: locations_player_2}, 1, all_pairs_distances, population_per_node, alpha, beta))
             else:
                 bimatrix_payoffs[(locations_player_2, locations_player_1)] = bimatrix_payoffs[(locations_player_1, locations_player_2)]
-    print(f"Payoffs computation finished in {round((start_timer() - payoff_computation_time)/60.0, 2)} minutes, checking for Nash Equilibrium")
+    print(f"Payoffs computation finished in {round((current_time() - payoff_computation_time)/60.0, 2)} minutes, checking for Nash Equilibrium")
     best_second_player_action_per_first_player_action = {}
     for locations_player_1 in location_actions[0]:
         best_second_player_action_per_first_player_action = find_all_maxima_in_dict({locations_player_2 : bimatrix_payoffs[(locations_player_1, locations_player_2)][0] for locations_player_2 in location_actions[1]})
@@ -146,28 +146,26 @@ def solve_game_by_RSOC(other_player_locations, population_per_node, utilities, l
 
     # Check the optimization status
     status = model.Status
-    # if status == grb.GRB.Status.OPTIMAL:
-    #     print("Optimal solution found")
-    if status == grb.GRB.Status.INFEASIBLE:
+    if status == grb.GRB.Status.OPTIMAL:
+        pass
+    elif status == grb.GRB.Status.INFEASIBLE:
         print("Model is infeasible")
     elif status == grb.GRB.Status.UNBOUNDED:
         print("Model is unbounded")
-    elif status == grb.GRB.Status.OPTIMAL:
-        pass
     else:
         print(f"Optimization ended with status {status}")
 
     # Return the values of x
     return [ll for ll in locker_nodes if x[ll].X == 1.0], model.objVal
 
-def game_simulation(playing_style, solution_method, number_of_lockers_per_player, all_pairs_distances, population_per_node, alpha, beta, initial_location_actions, max_iterations):
+def game_simulation_with_initial_actions_given(playing_style, solution_method, number_of_lockers_per_player, all_pairs_distances, population_per_node, alpha, beta, initial_location_actions, max_iterations):
     
-    computation_time = start_timer()
     new_location_player_dict = {}
     new_payoff_player_dict = {}
     current_location_actions = initial_location_actions.copy()
     current_payoffs = {player: 0 for player in range(len(number_of_lockers_per_player))}
     history_location_actions = []
+    player_for_sequential = 0
     iteration = 0
     ### Iterate over the players and find convergence of the game or cycles
     while iteration < max_iterations:
@@ -191,23 +189,24 @@ def game_simulation(playing_style, solution_method, number_of_lockers_per_player
                 current_payoffs[player] = payoff_per_location_decision(current_location_actions[player], current_location_actions, player, all_pairs_distances, population_per_node, alpha, beta)
             new_location_player_dict, new_payoff_playe_dict = {}, {}
         elif playing_style == 'sequential':
-            for player in range(number_of_players):
-                if solution_method == 'enumeration':
-                    new_location_player, new_payoff_player = best_location_action(location_actions[player], current_location_actions, player, all_pairs_distances, population_per_node, alpha, beta)
-                    if new_payoff_player > current_payoffs[player]:
-                        current_location_actions[player] = new_location_player
-                        current_payoffs[player] = new_payoff_player
-                elif solution_method == 'RSOC':
-                    current_location_actions[player], current_payoffs[player] = solve_game_by_RSOC(current_location_actions[1-player], population_per_node, utilities, locker_cost, number_of_lockers_per_player[player])
-                else:
-                    print("Solution method not recognized")
-                    break
+            if solution_method == 'enumeration':
+                new_location_player, new_payoff_player = best_location_action(location_actions[player_for_sequential], current_location_actions, player, all_pairs_distances, population_per_node, alpha, beta)
+                if new_payoff_player > current_payoffs[player_for_sequential]:
+                    current_location_actions[player_for_sequential] = new_location_player
+                    current_payoffs[player_for_sequential] = new_payoff_player
+            elif solution_method == 'RSOC':
+                current_location_actions[player_for_sequential], current_payoffs[player_for_sequential] = solve_game_by_RSOC(current_location_actions[1-player_for_sequential], population_per_node, utilities, locker_cost, number_of_lockers_per_player[player_for_sequential])
+            else:
+                print("Solution method not recognized")
+                break
+            player_for_sequential = 1 - player_for_sequential
         else:
             print("Playing style not recognized")
             break
         iteration += 1
         if iteration == max_iterations:
             print("Maximum iterations reached")
+            convergence_or_cycle = "MAX_ITERATIONS"
         if current_location_actions in history_location_actions:
             if current_location_actions == history_location_actions[-1]:
                 convergence_or_cycle = "CONVERGED"
@@ -229,7 +228,6 @@ def game_simulation(playing_style, solution_method, number_of_lockers_per_player
     print(f"Number of iterations: {iteration}")
     print(f"Current location actions: {current_location_actions}")
     print(f"Current payoffs: {current_payoffs}")
-    print(f"Computation time: {round((start_timer() - computation_time)/60.0, 2)} minutes")
 
     return current_location_actions, history_location_actions, convergence_or_cycle
 
@@ -242,7 +240,7 @@ def find_equilibria_by_RSOC_for_all_initial_combinations(location_actions, all_p
     for initial_action_player_0 in location_actions[0]:
         for initial_action_player_1 in location_actions[1]:
             initial_location_actions = {0: initial_action_player_0, 1: initial_action_player_1}
-            current_actions, _, convergence_or_cycle = game_simulation(playing_style, solution_method, number_of_lockers_per_player, all_pairs_distances, population_per_node, alpha, beta, initial_location_actions, max_iterations)
+            current_actions, _, convergence_or_cycle = game_simulation_with_initial_actions_given(playing_style, solution_method, number_of_lockers_per_player, all_pairs_distances, population_per_node, alpha, beta, initial_location_actions, max_iterations)
             if current_actions in current_equilibria:
                 continue
             if convergence_or_cycle == "CONVERGED":
@@ -256,7 +254,7 @@ def find_equilibria_by_RSOC_for_all_initial_combinations(location_actions, all_p
         print("No Nash Equilibrium detected")
         return []
     else:
-        return current_actions
+        return current_equilibria
 
 def plot_simulation_state(G, current_actions):
     
@@ -345,6 +343,8 @@ if __name__ == """__main__""":
     ### Initialize the location decisions of the players
     max_iterations = 100
     find_one_or_return_all = 'one'
+    experiment_start_time = current_time()
     current_actions = find_equilibria_by_RSOC_for_all_initial_combinations(location_actions, all_pairs_distances, population_per_node, alpha, beta, max_iterations, find_one_or_return_all)
+    print(f"Computation time: {round((current_time() - experiment_start_time)/60.0, 2)} minutes")
 
     plot_simulation_state(G, current_actions[0])
