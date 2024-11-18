@@ -84,6 +84,22 @@ def NE_two_players_by_enumeration_check(location_actions, all_pairs_distances, p
                 NEs_detected.append((locations_player_1, second_player_action))
     return NEs_detected
 
+def find_equilibria_by_enumeration_for_two_players(location_actions, all_pairs_distances, population_per_node, alpha, beta):
+    ### Check if a Nash Equilibrium exists by enumeration
+    number_of_players = len(location_actions.keys())
+    if number_of_players == 2:
+        print("Checking for Nash Equilibrium for two players")
+        NEs_two_players = NE_two_players_by_enumeration_check(location_actions, all_pairs_distances, population_per_node, alpha, beta)
+        if NEs_two_players:
+            print(f"Nash Equilibrium detected: {NEs_two_players}")
+        else:
+            print("No Nash Equilibrium detected")
+        print()
+        return NEs_two_players
+    else:
+        print("Number of players is not two, cannot check for Nash Equilibrium")
+        return None
+
 def solve_game_by_RSOC(other_player_locations, population_per_node, utilities, locker_cost, budget):
     """
     This function finds the optimal strategy through a Rotated Second Order Cone (RSOC) 
@@ -144,7 +160,7 @@ def solve_game_by_RSOC(other_player_locations, population_per_node, utilities, l
     # Return the values of x
     return [ll for ll in locker_nodes if x[ll].X == 1.0], model.objVal
 
-def game_simulation(playing_style, solution_method, number_of_lockers_per_player, all_pairs_distances, alpha, beta, initial_location_actions, max_iterations):
+def game_simulation(playing_style, solution_method, number_of_lockers_per_player, all_pairs_distances, population_per_node, alpha, beta, initial_location_actions, max_iterations):
     
     computation_time = start_timer()
     new_location_player_dict = {}
@@ -217,6 +233,65 @@ def game_simulation(playing_style, solution_method, number_of_lockers_per_player
 
     return current_location_actions, history_location_actions, convergence_or_cycle
 
+def find_equilibria_by_RSOC_for_all_initial_combinations(location_actions, all_pairs_distances, population_per_node, alpha, beta, max_iterations, find_one_or_return_all):
+    
+    ### Initialize the location decisions of the players
+    assert find_one_or_return_all in ['one', 'all'], "Find one or return all not recognized"
+    current_equilibria = []
+
+    for initial_action_player_0 in location_actions[0]:
+        for initial_action_player_1 in location_actions[1]:
+            initial_location_actions = {0: initial_action_player_0, 1: initial_action_player_1}
+            current_actions, _, convergence_or_cycle = game_simulation(playing_style, solution_method, number_of_lockers_per_player, all_pairs_distances, population_per_node, alpha, beta, initial_location_actions, max_iterations)
+            if current_actions in current_equilibria:
+                continue
+            if convergence_or_cycle == "CONVERGED":
+                print("Convergence detected: There is a pure Nash Equilibrium")
+                if find_one_or_return_all == 'one':
+                    return [current_actions]
+                else:
+                    current_equilibria.append(current_actions)
+
+    if len(current_equilibria) == 0:
+        print("No Nash Equilibrium detected")
+        return []
+    else:
+        return current_actions
+
+def plot_simulation_state(G, current_actions):
+    
+    colors = ['blue', 'orange', 'olive', 'magenta', 'cyan', 'yellow',
+                'purple', 'brown', 'pink', 'green', 'lime', 'navy',
+                'teal', 'maroon', 'aqua', 'fuchsia']
+    
+    number_of_players = len(current_actions.keys())
+    located_lockers = list(chain(*current_actions.values()))
+
+    colors_per_node_with_players = {node: [colors[player] for player in range(number_of_players) if node in current_actions[player]] for node in G.nodes() if node in located_lockers}
+    node_colors = ['red' if data.get('locker_possible') == 'locker' else 'black' for _, data in G.nodes(data=True)]
+    node_sizes = [50 if data.get('locker_possible') == 'locker' else 10 for _, data in G.nodes(data=True)]
+            
+
+    print("Color and size map created")
+
+    ### Plot the graph
+    fig, ax = ox.plot_graph(G, 
+                            node_color=node_colors, 
+                            node_size=node_sizes, 
+                            edge_color='black', 
+                            bgcolor='white', 
+                            show=False, 
+                            close=False)
+    plt.axis("equal")
+    for node, players in colors_per_node_with_players.items():
+        node_position = (G.nodes(data=True)[node]['x'], G.nodes(data=True)[node]['y'])  
+        for idx_player in range(len(players)-1,-1,-1):
+            circle_radius = 2e-4+1.5e-4*idx_player
+            circle_color = players[idx_player]
+            circle = plt.Circle(node_position, circle_radius, color=circle_color, zorder=number_of_players-idx_player)
+            ax.add_patch(circle)
+    plt.show()
+
 
 
 if __name__ == """__main__""":
@@ -251,7 +326,7 @@ if __name__ == """__main__""":
     population_per_node = {node: round(float(data.get('node_population'))) for node, data in G.nodes(data=True)}
 
     ### Define the parameters of the players: Players are 0, 1, ..., n_players-1
-    number_of_lockers_per_player = [3, 3]#{player: 2 for player in range(number_of_players)}
+    number_of_lockers_per_player = [6, 4]#{player: 2 for player in range(number_of_players)}
     number_of_players = len(number_of_lockers_per_player)
     alpha = {district : 1 for district in G.nodes}
     beta = 1e-2
@@ -263,34 +338,13 @@ if __name__ == """__main__""":
     ### Enumerate the actions
     location_actions = {player : list(combinations(nodes_with_locker_locations, number_of_lockers_per_player[player])) for player in range(number_of_players)}
 
+
     ### Check if a Nash Equilibrium exists by enumeration
-    # if number_of_players == 2:
-    #     print("Checking for Nash Equilibrium for two players")
-    #     NEs_two_players = NE_two_players_by_enumeration_check(location_actions, all_pairs_distances, population_per_node, alpha, beta)
-    #     if NEs_two_players:
-    #         print(f"Nash Equilibrium detected: {NEs_two_players}")
-    #     else:
-    #         print("No Nash Equilibrium detected")
-    #     print()
+    # NEs_detected = find_equilibria_by_enumeration_for_two_players(location_actions, all_pairs_distances, population_per_node, alpha, beta)
 
     ### Initialize the location decisions of the players
     max_iterations = 100
+    find_one_or_return_all = 'one'
+    current_actions = find_equilibria_by_RSOC_for_all_initial_combinations(location_actions, all_pairs_distances, population_per_node, alpha, beta, max_iterations, find_one_or_return_all)
 
-    # current_location_actions = {player: random.choice(location_actions[player]) for player in range(number_of_players)}
-    # current_actions, action_history, convergence_or_cycle = game_simulation(playing_style, solution_method, number_of_lockers_per_player, all_pairs_distances, alpha, beta, current_location_actions, max_iterations)
-
-    break_again = False
-    for initial_action_player_0 in location_actions[0]:
-        for initial_action_player_1 in location_actions[1]:
-            initial_location_actions = {0: initial_action_player_0, 1: initial_action_player_1}
-            current_actions, _, convergence_or_cycle = game_simulation(playing_style, solution_method, number_of_lockers_per_player, all_pairs_distances, alpha, beta, initial_location_actions, max_iterations)
-            if convergence_or_cycle == "CONVERGED":
-                print("Convergence detected: There is a pure Nash Equilibrium")
-                break_again = True
-                break
-        if break_again:
-            break
-
-    located_lockers = list(chain(*current_actions.values()))
-
-    plot_simulation_state(G, current_actions)
+    plot_simulation_state(G, current_actions[0])
