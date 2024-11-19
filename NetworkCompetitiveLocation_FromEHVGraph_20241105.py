@@ -25,7 +25,7 @@ def find_all_maxima_in_dict(dictionary):
     max_indices = [i for i, value in dictionary.items() if value == max_value]
     return max_indices
 
-def payoff_per_location_decision(location_decision, current_location_actions, player, all_pair_distances, population_per_node, alpha, beta):
+def payoff_per_location_decision(location_decision, current_location_actions, player, population_per_node, utilities):
     """
     This function calculates the payoff of a player given a location decision
     :param graph: The graph of the city
@@ -35,21 +35,22 @@ def payoff_per_location_decision(location_decision, current_location_actions, pl
     current_actions = current_location_actions.copy()
     current_actions[player] = location_decision
     current_lockers = list(chain(*current_actions.values()))
+    districts = {district for _, district in utilities.keys()}
     # Calculate the payoff of the player
     payoff = 0.0
     for locker in location_decision:
-        for node in all_pair_distances.keys():
+        for district in districts:
             # print("Payoff update")
-            payoff += population_per_node[node] * np.exp(alpha[locker] - beta * all_pair_distances[locker][node]) / (1 + sum( np.exp(alpha[locker] - beta * all_pair_distances[locker][node]) for locker in current_lockers))
+            payoff += population_per_node[district] * utilities[district, locker] / (1 + sum(utilities[district, locker] for locker in current_lockers))
     return payoff
 
-def best_location_action(location_actions, current_location_actions, player, all_pairs_distances, population_per_node, alpha, beta):
-    payoffs = {location_decision: payoff_per_location_decision(location_decision, current_location_actions, player, all_pairs_distances, population_per_node, alpha, beta) for location_decision in location_actions}
+def best_location_action(location_actions, current_location_actions, player, population_per_node, utilities):
+    payoffs = {location_decision: payoff_per_location_decision(location_decision, current_location_actions, player, population_per_node, utilities) for location_decision in location_actions}
     # print(f"Player {player} payoffs: {payoffs}")
     best_location = max(payoffs, key=payoffs.get)
     return best_location, payoffs[best_location]
 
-def NE_two_players_by_enumeration_check(location_actions, all_pairs_distances, population_per_node, alpha, beta):
+def NE_two_players_by_enumeration_check(location_actions, population_per_node, utilities):
     """
     This function checks if a Nash Equilibrium exists by enumerating all possible location decisions
     :param location_actions: The possible location actions of the players
@@ -72,7 +73,7 @@ def NE_two_players_by_enumeration_check(location_actions, all_pairs_distances, p
             if not symmetric_flag or (symmetric_flag and (locations_player_1, locations_player_2) not in bimatrix_payoffs.keys()):
                 # payoffs = {0: payoff_per_location_decision(locations_player_1, {0: locations_player_1, 1: locations_player_2}, 0, all_pairs_distances, population_per_node, alpha, beta),
                 #            1: payoff_per_location_decision(locations_player_2, {0: locations_player_1, 1: locations_player_2}, 1, all_pairs_distances, population_per_node, alpha, beta)}
-                bimatrix_payoffs[(locations_player_1, locations_player_2)] = (payoff_per_location_decision(locations_player_1, {0: locations_player_1, 1: locations_player_2}, 0, all_pairs_distances, population_per_node, alpha, beta), payoff_per_location_decision(locations_player_2, {0: locations_player_1, 1: locations_player_2}, 1, all_pairs_distances, population_per_node, alpha, beta))
+                bimatrix_payoffs[(locations_player_1, locations_player_2)] = (payoff_per_location_decision(locations_player_1, {0: locations_player_1, 1: locations_player_2}, 0, population_per_node, utilities), payoff_per_location_decision(locations_player_2, {0: locations_player_1, 1: locations_player_2}, 1, population_per_node, utilities))
             else:
                 bimatrix_payoffs[(locations_player_2, locations_player_1)] = bimatrix_payoffs[(locations_player_1, locations_player_2)]
     print(f"Payoffs computation finished in {round((current_time() - payoff_computation_time)/60.0, 2)} minutes, checking for Nash Equilibrium")
@@ -158,7 +159,7 @@ def solve_game_by_RSOC(other_player_locations, population_per_node, utilities, l
     # Return the values of x
     return [ll for ll in locker_nodes if x[ll].X == 1.0], model.objVal
 
-def game_simulation_with_initial_actions_given(playing_style, solution_method, number_of_lockers_per_player, all_pairs_distances, population_per_node, alpha, beta, initial_location_actions, max_iterations):
+def game_simulation_with_initial_actions_given(playing_style, solution_method, number_of_lockers_per_player, population_per_node, utilities, initial_location_actions, max_iterations):
     
     new_location_player_dict = {}
     new_payoff_player_dict = {}
@@ -172,7 +173,7 @@ def game_simulation_with_initial_actions_given(playing_style, solution_method, n
         if playing_style == 'simultaneous':
             for player in range(number_of_players):
                 if solution_method == 'enumeration':
-                    new_location_player, new_payoff_player = best_location_action(location_actions[player], current_location_actions, player, all_pairs_distances, population_per_node, alpha, beta)
+                    new_location_player, new_payoff_player = best_location_action(location_actions[player], current_location_actions, player, population_per_node, utilities)
                     if new_payoff_player > current_payoffs[player]:
                         new_location_player_dict[player] = new_location_player
                     else:
@@ -186,7 +187,7 @@ def game_simulation_with_initial_actions_given(playing_style, solution_method, n
             print(f"Number of lockers set: {[len(current_location_actions[player]) for player in range(number_of_players)]}")
             assert all(len(current_location_actions[player]) - number_of_lockers_per_player[player] == 0 for player in range(number_of_players)), "Number of lockers do not match"
             for player in range(number_of_players):
-                current_payoffs[player] = payoff_per_location_decision(current_location_actions[player], current_location_actions, player, all_pairs_distances, population_per_node, alpha, beta)
+                current_payoffs[player] = payoff_per_location_decision(current_location_actions[player], current_location_actions, player, population_per_node, utilities)
             new_location_player_dict, new_payoff_player_dict = {}, {}
         elif playing_style == 'sequential':
             if solution_method == 'enumeration':
@@ -231,7 +232,7 @@ def game_simulation_with_initial_actions_given(playing_style, solution_method, n
 
     return current_location_actions, history_location_actions, convergence_or_cycle
 
-def find_equilibria_by_RSOC_for_all_initial_combinations(location_actions, all_pairs_distances, population_per_node, alpha, beta, max_iterations, find_one_or_return_all):
+def find_equilibria_by_RSOC_for_all_initial_combinations(location_actions, population_per_node, utilities, max_iterations, find_one_or_return_all):
     
     ### Initialize the location decisions of the players
     assert find_one_or_return_all in ['one', 'all'], "Find one or return all not recognized"
@@ -240,7 +241,7 @@ def find_equilibria_by_RSOC_for_all_initial_combinations(location_actions, all_p
     for initial_action_player_0 in location_actions[0]:
         for initial_action_player_1 in location_actions[1]:
             initial_location_actions = {0: initial_action_player_0, 1: initial_action_player_1}
-            current_actions, _, convergence_or_cycle = game_simulation_with_initial_actions_given('sequential', 'RSOC', number_of_lockers_per_player, all_pairs_distances, population_per_node, alpha, beta, initial_location_actions, max_iterations)
+            current_actions, _, convergence_or_cycle = game_simulation_with_initial_actions_given('sequential', 'RSOC', number_of_lockers_per_player, population_per_node, utilities, initial_location_actions, max_iterations)
             if current_actions in current_equilibria:
                 continue
             if convergence_or_cycle == "CONVERGED":
@@ -332,10 +333,11 @@ if __name__ == """__main__""":
     number_of_players = len(number_of_lockers_per_player)
     alpha = {district : 1 for district in G.nodes}
     beta = 1e-2
+    utilities = {(district, locker): np.exp(alpha[district] - beta * all_pairs_distances[locker][district]) for district in all_pairs_distances.keys() for locker in nodes_with_locker_locations}
+
 
     if solution_method == 'RSOC':
         locker_cost = {node: 1 for node in nodes_with_locker_locations}
-        utilities = {(district, locker): np.exp(alpha[district] - beta * all_pairs_distances[locker][district]) for district in all_pairs_distances.keys() for locker in nodes_with_locker_locations}
 
     ### Enumerate the actions
     location_actions = {player : list(combinations(nodes_with_locker_locations, number_of_lockers_per_player[player])) for player in range(number_of_players)}
