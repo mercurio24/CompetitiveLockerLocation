@@ -187,10 +187,10 @@ def game_simulation_with_initial_actions_given(playing_style, solution_method, n
             assert all(len(current_location_actions[player]) - number_of_lockers_per_player[player] == 0 for player in range(number_of_players)), "Number of lockers do not match"
             for player in range(number_of_players):
                 current_payoffs[player] = payoff_per_location_decision(current_location_actions[player], current_location_actions, player, all_pairs_distances, population_per_node, alpha, beta)
-            new_location_player_dict, new_payoff_playe_dict = {}, {}
+            new_location_player_dict, new_payoff_player_dict = {}, {}
         elif playing_style == 'sequential':
             if solution_method == 'enumeration':
-                new_location_player, new_payoff_player = best_location_action(location_actions[player_for_sequential], current_location_actions, player, all_pairs_distances, population_per_node, alpha, beta)
+                new_location_player, new_payoff_player = best_location_action(location_actions[player_for_sequential], current_location_actions, player_for_sequential, all_pairs_distances, population_per_node, alpha, beta)
                 if new_payoff_player > current_payoffs[player_for_sequential]:
                     current_location_actions[player_for_sequential] = new_location_player
                     current_payoffs[player_for_sequential] = new_payoff_player
@@ -240,7 +240,7 @@ def find_equilibria_by_RSOC_for_all_initial_combinations(location_actions, all_p
     for initial_action_player_0 in location_actions[0]:
         for initial_action_player_1 in location_actions[1]:
             initial_location_actions = {0: initial_action_player_0, 1: initial_action_player_1}
-            current_actions, _, convergence_or_cycle = game_simulation_with_initial_actions_given(playing_style, solution_method, number_of_lockers_per_player, all_pairs_distances, population_per_node, alpha, beta, initial_location_actions, max_iterations)
+            current_actions, _, convergence_or_cycle = game_simulation_with_initial_actions_given('sequential', 'RSOC', number_of_lockers_per_player, all_pairs_distances, population_per_node, alpha, beta, initial_location_actions, max_iterations)
             if current_actions in current_equilibria:
                 continue
             if convergence_or_cycle == "CONVERGED":
@@ -255,6 +255,11 @@ def find_equilibria_by_RSOC_for_all_initial_combinations(location_actions, all_p
         return []
     else:
         return current_equilibria
+
+def find_social_optimum_by_RSOC(population_per_node, utilities, locker_cost, number_of_lockers_per_player):
+    ### Initialize the location decisions of the players
+    return solve_game_by_RSOC([], population_per_node, utilities, locker_cost, sum(number_of_lockers_per_player))    
+
 
 def plot_simulation_state(G, current_actions):
     
@@ -289,7 +294,6 @@ def plot_simulation_state(G, current_actions):
             circle = plt.Circle(node_position, circle_radius, color=circle_color, zorder=number_of_players-idx_player)
             ax.add_patch(circle)
     plt.show()
-
 
 
 if __name__ == """__main__""":
@@ -336,7 +340,6 @@ if __name__ == """__main__""":
     ### Enumerate the actions
     location_actions = {player : list(combinations(nodes_with_locker_locations, number_of_lockers_per_player[player])) for player in range(number_of_players)}
 
-
     ### Check if a Nash Equilibrium exists by enumeration
     # NEs_detected = find_equilibria_by_enumeration_for_two_players(location_actions, all_pairs_distances, population_per_node, alpha, beta)
 
@@ -344,7 +347,11 @@ if __name__ == """__main__""":
     max_iterations = 100
     find_one_or_return_all = 'one'
     experiment_start_time = current_time()
-    current_actions = find_equilibria_by_RSOC_for_all_initial_combinations(location_actions, all_pairs_distances, population_per_node, alpha, beta, max_iterations, find_one_or_return_all)
+    equilibria_actions = find_equilibria_by_RSOC_for_all_initial_combinations(location_actions, all_pairs_distances, population_per_node, alpha, beta, max_iterations, find_one_or_return_all)
     print(f"Computation time: {round((current_time() - experiment_start_time)/60.0, 2)} minutes")
+    SO_action, SO_payoff = find_social_optimum_by_RSOC(population_per_node, utilities, locker_cost, number_of_lockers_per_player)
+    price_of_anarchy = SO_payoff / sum(payoff_per_location_decision(equilibria_actions[0][player], equilibria_actions[0], player, all_pairs_distances, population_per_node, alpha, beta) for player in [0,1])
+    print(f"Price of Anarchy: {price_of_anarchy}")
 
-    plot_simulation_state(G, current_actions[0])
+
+    plot_simulation_state(G, equilibria_actions[0])
