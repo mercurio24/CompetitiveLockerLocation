@@ -9,8 +9,29 @@ import numpy as np
 import plotly.graph_objects as go
 from time import time as current_time
 import gurobipy as grb
+from joblib import Parallel, delayed
+import joblib
+from contextlib import contextmanager
+from tqdm import tqdm
 
 random.seed(28)
+
+@contextmanager
+def tqdm_joblib(tqdm_object):
+    """Context manager to patch joblib to report into tqdm progress bar given as argument"""
+    class TqdmBatchCompletionCallback(joblib.parallel.BatchCompletionCallBack):
+        def __call__(self, *args, **kwargs):
+            tqdm_object.update(n=self.batch_size)
+            return super().__call__(*args, **kwargs)
+
+    old_batch_callback = joblib.parallel.BatchCompletionCallBack
+    joblib.parallel.BatchCompletionCallBack = TqdmBatchCompletionCallback
+    try:
+        yield tqdm_object
+    finally:
+        joblib.parallel.BatchCompletionCallBack = old_batch_callback
+        tqdm_object.close()
+
 
 def find_all_maxima_in_dict(dictionary):
     """
@@ -221,7 +242,6 @@ def game_simulation_with_initial_actions_given(playing_style, solution_method, n
         # if number_of_players == 2:
         #     status_in_NE = True if current_location_actions.values() in NEs_two_players else False
         #     print(f"current iteration in NEs for two players: {status_in_NE}")
-        print()
 
     # located_lockers = list(chain(*current_location_actions.values()))
 
@@ -230,32 +250,40 @@ def game_simulation_with_initial_actions_given(playing_style, solution_method, n
     print(f"Current location actions: {current_location_actions}")
     print(f"Current payoffs: {current_payoffs}")
 
-    return current_location_actions, history_location_actions, convergence_or_cycle
+    return current_location_actions, current_payoffs, history_location_actions, convergence_or_cycle
 
 def find_equilibria_by_RSOC_for_all_initial_combinations(location_actions, population_per_node, utilities, max_iterations, find_one_or_return_all):
     
     ### Initialize the location decisions of the players
     assert find_one_or_return_all in ['one', 'all'], "Find one or return all not recognized"
     current_equilibria = []
+    number_of_initial_combinations = len(location_actions[0]) * len(location_actions[1])
+    iterations_counter = 0
 
-    for initial_action_player_0 in location_actions[0]:
-        for initial_action_player_1 in location_actions[1]:
-            initial_location_actions = {0: initial_action_player_0, 1: initial_action_player_1}
-            current_actions, _, convergence_or_cycle = game_simulation_with_initial_actions_given('sequential', 'RSOC', number_of_lockers_per_player, population_per_node, utilities, initial_location_actions, max_iterations)
-            if current_actions in current_equilibria:
-                continue
-            if convergence_or_cycle == "CONVERGED":
-                print("Convergence detected: There is a pure Nash Equilibrium")
-                if find_one_or_return_all == 'one':
-                    return [current_actions]
-                else:
-                    current_equilibria.append(current_actions)
+    if find_one_or_return_all == 'all':
+        with tqdm_joblib(tqdm(desc="Progress", total=number_of_initial_combinations)) as progress_bar:
+            results_of_game_simulations = list(Parallel(n_jobs=1, verbose=0)(delayed(game_simulation_with_initial_actions_given)('sequential', 'RSOC', number_of_lockers_per_player, population_per_node, utilities, {0: initial_action_player_0, 1: initial_action_player_1}, max_iterations) for initial_action_player_0 in location_actions[0] for initial_action_player_1 in location_actions[1]))
+            return [result[:2] for result in results_of_game_simulations if result[3] == "CONVERGED"]
+    elif find_one_or_return_all == 'one':    
+        for initial_action_player_0 in location_actions[0]:
+            for initial_action_player_1 in location_actions[1]:
+                print(f"\nCombination {iterations_counter}/{number_of_initial_combinations}")
+                initial_location_actions = {0: initial_action_player_0, 1: initial_action_player_1}
+                current_actions, current_payoffs, _, convergence_or_cycle = game_simulation_with_initial_actions_given('sequential', 'RSOC', number_of_lockers_per_player, population_per_node, utilities, initial_location_actions, max_iterations)
+                if current_actions in current_equilibria:
+                    continue
+                if convergence_or_cycle == "CONVERGED":
+                    print("Convergence detected: There is a pure Nash Equilibrium")
+                return [(current_actions, current_payoffs)]
+                    # elif find_one_or_return_all == 'all':
+                    #     current_equilibria.append((current_actions, current_payoffs))
+                    # else:
+                    #     raise ValueError("Find one or return all not recognized")
+                    # iterations_counter += 1
 
     if len(current_equilibria) == 0:
         print("No Nash Equilibrium detected")
-        return []
-    else:
-        return current_equilibria
+    return current_equilibria
 
 def find_social_optimum_by_RSOC(population_per_node, utilities, locker_cost, number_of_lockers_per_player):
     ### Initialize the location decisions of the players
@@ -329,7 +357,7 @@ if __name__ == """__main__""":
     population_per_node = {node: round(float(data.get('node_population'))) for node, data in G.nodes(data=True)}
 
     ### Define the parameters of the players: Players are 0, 1, ..., n_players-1
-    number_of_lockers_per_player = [6, 4]#{player: 2 for player in range(number_of_players)}
+    number_of_lockers_per_player = [1, 1]#{player: 2 for player in range(number_of_players)}
     number_of_players = len(number_of_lockers_per_player)
     alpha = {district : 1 for district in G.nodes}
     beta = 1e-2
@@ -347,13 +375,22 @@ if __name__ == """__main__""":
 
     ### Initialize the location decisions of the players
     max_iterations = 100
-    find_one_or_return_all = 'one'
+    find_one_or_return_all = 'all'
     experiment_start_time = current_time()
-    equilibria_actions = find_equilibria_by_RSOC_for_all_initial_combinations(location_actions, all_pairs_distances, population_per_node, alpha, beta, max_iterations, find_one_or_return_all)
+    equilibria_actions_and_payoffs = find_equilibria_by_RSOC_for_all_initial_combinations(location_actions, population_per_node, utilities, max_iterations, find_one_or_return_all)
     print(f"Computation time: {round((current_time() - experiment_start_time)/60.0, 2)} minutes")
     SO_action, SO_payoff = find_social_optimum_by_RSOC(population_per_node, utilities, locker_cost, number_of_lockers_per_player)
-    price_of_anarchy = SO_payoff / sum(payoff_per_location_decision(equilibria_actions[0][player], equilibria_actions[0], player, all_pairs_distances, population_per_node, alpha, beta) for player in [0,1])
-    print(f"Price of Anarchy: {price_of_anarchy}")
+    if find_one_or_return_all == 'one':
+        price_of_anarchy = SO_payoff / sum(payoff_per_location_decision(equilibria_actions_and_payoffs[0][0][player], equilibria_actions_and_payoffs[0][0], player, population_per_node, utilities) for player in [0,1])
+        print(f"Price of Anarchy: {price_of_anarchy}")
+    elif find_one_or_return_all == 'all':  
+        smallest_payoff_equilibrium, largest_payoff_equilibrium = min(equilibria_actions_and_payoffs, key=lambda x: sum(x[1].values()))[1], max(equilibria_actions_and_payoffs, key=lambda x: sum(x[1].values()))[1]
+        price_of_anarchy = SO_payoff / sum(smallest_payoff_equilibrium.values())
+        price_of_stability = SO_payoff / sum(largest_payoff_equilibrium.values())
+        print(f"Price of Anarchy: {price_of_anarchy}")
+        print(f"Price of Stability: {price_of_stability}")
+    else:
+        print("Find one or return all not recognized")
 
 
-    plot_simulation_state(G, equilibria_actions[0])
+    plot_simulation_state(G, equilibria_actions_and_payoffs[0][0])
