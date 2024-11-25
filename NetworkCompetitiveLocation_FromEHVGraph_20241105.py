@@ -53,9 +53,13 @@ def payoff_per_location_decision(location_decision, current_location_actions, pl
     :param location_decision: The location decision of the player
     :return: The payoff of the player
     """
-    current_actions = current_location_actions.copy()
+
+    if isinstance(current_location_actions, tuple):
+        current_actions = list(current_location_actions).copy()
+    else:
+        current_actions = current_location_actions.copy()
     current_actions[player] = location_decision
-    current_lockers = list(chain(*current_actions.values()))
+    current_lockers = [locker for lockers in current_actions for locker in lockers]#list(chain(*current_actions.values()))
     districts = {district for _, district in utilities.keys()}
     # Calculate the payoff of the player
     payoff = 0.0
@@ -178,14 +182,13 @@ def solve_game_by_RSOC(other_player_locations, population_per_node, utilities, l
         print(f"Optimization ended with status {status}")
 
     # Return the values of x
-    return [ll for ll in locker_nodes if x[ll].X == 1.0], model.objVal
+    return tuple([ll for ll in locker_nodes if x[ll].X == 1.0]), model.objVal
 
-def game_simulation_with_initial_actions_given(playing_style, solution_method, number_of_lockers_per_player, population_per_node, utilities, initial_location_actions, max_iterations):
+def game_simulation_with_initial_actions_given(playing_style, solution_method, number_of_lockers_per_player, population_per_node, utilities, initial_location_actions, max_iterations, printing=False):
     
-    new_location_player_dict = {}
-    new_payoff_player_dict = {}
+    new_location_player_dict, new_payoff_player_dict = [None, None], [0,0]
     current_location_actions = initial_location_actions.copy()
-    current_payoffs = {player: 0 for player in range(len(number_of_lockers_per_player))}
+    current_payoffs = [0,0]#{player: 0 for player in range(len(number_of_lockers_per_player))}
     history_location_actions = []
     player_for_sequential = 0
     iteration = 0
@@ -205,11 +208,12 @@ def game_simulation_with_initial_actions_given(playing_style, solution_method, n
                     print("Solution method not recognized")
                     break
             current_location_actions = new_location_player_dict.copy()
-            print(f"Number of lockers set: {[len(current_location_actions[player]) for player in range(number_of_players)]}")
+            if printing:
+                print(f"Number of lockers set: {[len(current_location_actions[player]) for player in range(number_of_players)]}")
             assert all(len(current_location_actions[player]) - number_of_lockers_per_player[player] == 0 for player in range(number_of_players)), "Number of lockers do not match"
             for player in range(number_of_players):
                 current_payoffs[player] = payoff_per_location_decision(current_location_actions[player], current_location_actions, player, population_per_node, utilities)
-            new_location_player_dict, new_payoff_player_dict = {}, {}
+            new_location_player_dict, new_payoff_player_dict = [None, None], [0,0]
         elif playing_style == 'sequential':
             if solution_method == 'enumeration':
                 new_location_player, new_payoff_player = best_location_action(location_actions[player_for_sequential], current_location_actions, player_for_sequential, all_pairs_distances, population_per_node, alpha, beta)
@@ -232,25 +236,29 @@ def game_simulation_with_initial_actions_given(playing_style, solution_method, n
         if current_location_actions in history_location_actions:
             if current_location_actions == history_location_actions[-1]:
                 convergence_or_cycle = "CONVERGED"
-                print(f"Iteration {iteration}: CONVERGED")
+                if printing:
+                    print(f"Iteration {iteration}: CONVERGED")
             else:
                 convergence_or_cycle = "CYCLE"
-                print(f"Iteration {iteration}: CYCLE DETECTED")
+                if printing:
+                    print(f"Iteration {iteration}: CYCLE DETECTED")
             break
         history_location_actions.append(current_location_actions)
-        print(f"Iteration {iteration}: {current_location_actions}")
+        if printing:
+            print(f"Iteration {iteration}: {current_location_actions}")
         # if number_of_players == 2:
         #     status_in_NE = True if current_location_actions.values() in NEs_two_players else False
         #     print(f"current iteration in NEs for two players: {status_in_NE}")
 
     # located_lockers = list(chain(*current_location_actions.values()))
 
-    print(f"Playing style: {playing_style}")
-    print(f"Number of iterations: {iteration}")
-    print(f"Current location actions: {current_location_actions}")
-    print(f"Current payoffs: {current_payoffs}")
+    if printing:
+        print(f"Playing style: {playing_style}")
+        print(f"Number of iterations: {iteration}")
+        print(f"Current location actions: {current_location_actions}")
+        print(f"Current payoffs: {current_payoffs}")
 
-    return current_location_actions, current_payoffs, history_location_actions, convergence_or_cycle
+    return tuple(current_location_actions), tuple(current_payoffs), convergence_or_cycle
 
 def find_equilibria_by_RSOC_for_all_initial_combinations(location_actions, population_per_node, utilities, max_iterations, find_one_or_return_all):
     
@@ -262,14 +270,14 @@ def find_equilibria_by_RSOC_for_all_initial_combinations(location_actions, popul
 
     if find_one_or_return_all == 'all':
         with tqdm_joblib(tqdm(desc="Progress", total=number_of_initial_combinations)) as progress_bar:
-            results_of_game_simulations = list(Parallel(n_jobs=1, verbose=0)(delayed(game_simulation_with_initial_actions_given)('sequential', 'RSOC', number_of_lockers_per_player, population_per_node, utilities, {0: initial_action_player_0, 1: initial_action_player_1}, max_iterations) for initial_action_player_0 in location_actions[0] for initial_action_player_1 in location_actions[1]))
-            return [result[:2] for result in results_of_game_simulations if result[3] == "CONVERGED"]
+            results_of_game_simulations = Parallel(n_jobs=3, verbose=0)(delayed(game_simulation_with_initial_actions_given)('sequential', 'RSOC', number_of_lockers_per_player, population_per_node, utilities, [initial_action_player_0, initial_action_player_1], max_iterations) for initial_action_player_0 in location_actions[0] for initial_action_player_1 in location_actions[1])
+            return {tuple(result[:2]) for result in results_of_game_simulations if result[2] == "CONVERGED"}
     elif find_one_or_return_all == 'one':    
         for initial_action_player_0 in location_actions[0]:
             for initial_action_player_1 in location_actions[1]:
                 print(f"\nCombination {iterations_counter}/{number_of_initial_combinations}")
-                initial_location_actions = {0: initial_action_player_0, 1: initial_action_player_1}
-                current_actions, current_payoffs, _, convergence_or_cycle = game_simulation_with_initial_actions_given('sequential', 'RSOC', number_of_lockers_per_player, population_per_node, utilities, initial_location_actions, max_iterations)
+                initial_location_actions = [initial_action_player_0, initial_action_player_1]
+                current_actions, current_payoffs, convergence_or_cycle = game_simulation_with_initial_actions_given('sequential', 'RSOC', number_of_lockers_per_player, population_per_node, utilities, initial_location_actions, max_iterations, True)
                 if current_actions in current_equilibria:
                     continue
                 if convergence_or_cycle == "CONVERGED":
@@ -296,8 +304,8 @@ def plot_simulation_state(G, current_actions):
                 'purple', 'brown', 'pink', 'green', 'lime', 'navy',
                 'teal', 'maroon', 'aqua', 'fuchsia']
     
-    number_of_players = len(current_actions.keys())
-    located_lockers = list(chain(*current_actions.values()))
+    number_of_players = len(current_actions)
+    located_lockers = list(chain(*current_actions))
 
     colors_per_node_with_players = {node: [colors[player] for player in range(number_of_players) if node in current_actions[player]] for node in G.nodes() if node in located_lockers}
     node_colors = ['red' if data.get('locker_possible') == 'locker' else 'black' for _, data in G.nodes(data=True)]
@@ -357,9 +365,10 @@ if __name__ == """__main__""":
     population_per_node = {node: round(float(data.get('node_population'))) for node, data in G.nodes(data=True)}
 
     ### Define the parameters of the players: Players are 0, 1, ..., n_players-1
-    number_of_lockers_per_player = [1, 1]#{player: 2 for player in range(number_of_players)}
+    number_of_lockers_per_player = [2, 2]#{player: 2 for player in range(number_of_players)}
+    pickle_path = current_folder + f"/NEs_analysis_{number_of_lockers_per_player[0]}_{number_of_lockers_per_player[1]}.pkl"
     number_of_players = len(number_of_lockers_per_player)
-    alpha = {district : 1 for district in G.nodes}
+    alpha = {district : 5 for district in G.nodes}
     beta = 1e-2
     utilities = {(district, locker): np.exp(alpha[district] - beta * all_pairs_distances[locker][district]) for district in all_pairs_distances.keys() for locker in nodes_with_locker_locations}
 
@@ -375,22 +384,35 @@ if __name__ == """__main__""":
 
     ### Initialize the location decisions of the players
     max_iterations = 100
-    find_one_or_return_all = 'all'
-    experiment_start_time = current_time()
-    equilibria_actions_and_payoffs = find_equilibria_by_RSOC_for_all_initial_combinations(location_actions, population_per_node, utilities, max_iterations, find_one_or_return_all)
-    print(f"Computation time: {round((current_time() - experiment_start_time)/60.0, 2)} minutes")
+    find_one_or_return_all = 'one'
+    if os.path.exists(pickle_path):
+        print("Loading NEs from pickle")
+        with open(pickle_path, "rb") as pickle_file:
+            equilibria_actions_and_payoffs, number_of_lockers_per_player = joblib.load(pickle_file)
+        computation_time = 0.0
+    else:
+        experiment_start_time = current_time()
+        equilibria_actions_and_payoffs = find_equilibria_by_RSOC_for_all_initial_combinations(location_actions, population_per_node, utilities, max_iterations, find_one_or_return_all)
+        computation_time = round((current_time() - experiment_start_time)/60.0, 2)
+        with open(pickle_path, "wb") as pickle_file:
+            joblib.dump((equilibria_actions_and_payoffs, number_of_lockers_per_player), pickle_file, compress=3)
     SO_action, SO_payoff = find_social_optimum_by_RSOC(population_per_node, utilities, locker_cost, number_of_lockers_per_player)
     if find_one_or_return_all == 'one':
         price_of_anarchy = SO_payoff / sum(payoff_per_location_decision(equilibria_actions_and_payoffs[0][0][player], equilibria_actions_and_payoffs[0][0], player, population_per_node, utilities) for player in [0,1])
         print(f"Price of Anarchy: {price_of_anarchy}")
     elif find_one_or_return_all == 'all':  
-        smallest_payoff_equilibrium, largest_payoff_equilibrium = min(equilibria_actions_and_payoffs, key=lambda x: sum(x[1].values()))[1], max(equilibria_actions_and_payoffs, key=lambda x: sum(x[1].values()))[1]
-        price_of_anarchy = SO_payoff / sum(smallest_payoff_equilibrium.values())
-        price_of_stability = SO_payoff / sum(largest_payoff_equilibrium.values())
-        print(f"Price of Anarchy: {price_of_anarchy}")
-        print(f"Price of Stability: {price_of_stability}")
+        smallest_overall_payoff_equilibrium, largest_payoff_equilibrium = min(sum(x[1]) for x in equilibria_actions_and_payoffs), max(sum(x[1]) for x in equilibria_actions_and_payoffs)
+        price_of_anarchy = SO_payoff / smallest_overall_payoff_equilibrium
+        price_of_stability = SO_payoff / largest_payoff_equilibrium
+        info_str = f"""{len(SO_action)} different equilibria have been found
+                       Computational time: {computation_time} minutes
+                       Price of Anarchy: {price_of_anarchy}
+                       Price of Stability: {price_of_stability}"""
+        print(info_str)
+        with open(current_folder+"/NEs_analysis2.txt", "w") as text_file:
+            text_file.write(info_str)
     else:
         print("Find one or return all not recognized")
 
 
-    plot_simulation_state(G, equilibria_actions_and_payoffs[0][0])
+    plot_simulation_state(G, equilibria_actions_and_payoffs.pop()[0])
