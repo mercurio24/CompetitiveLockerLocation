@@ -365,13 +365,24 @@ if __name__ == """__main__""":
     population_per_node = {node: round(float(data.get('node_population'))) for node, data in G.nodes(data=True)}
 
     ### Define the parameters of the players: Players are 0, 1, ..., n_players-1
-    number_of_lockers_per_player = [2, 2]#{player: 2 for player in range(number_of_players)}
+    number_of_lockers_per_player = [1, 1]#{player: 2 for player in range(number_of_players)}
     pickle_path = current_folder + f"/NEs_analysis_{number_of_lockers_per_player[0]}_{number_of_lockers_per_player[1]}.pkl"
+    max_iterations = 100
+    find_one_or_return_all = 'all'
     number_of_players = len(number_of_lockers_per_player)
-    alpha = {district : 5 for district in G.nodes}
+    alpha = {district : 3 for district in G.nodes}
     beta = 1e-2
     utilities = {(district, locker): np.exp(alpha[district] - beta * all_pairs_distances[locker][district]) for district in all_pairs_distances.keys() for locker in nodes_with_locker_locations}
 
+    info1_str = f"""
+Maximal distance: {max(all_pairs_distances[locker][district] for locker in nodes_with_locker_locations for district in all_pairs_distances.keys())} 
+Lockers per player: {number_of_lockers_per_player}
+Number of intersections: {len(G.nodes)} 
+Number of locker locations: {len(nodes_with_locker_locations)}
+Alpha: {random.sample(list(alpha.items()), 5)}
+Beta: {beta}
+Some utilities: {random.sample(list(utilities.items()), 5)}
+"""
 
     if solution_method == 'RSOC':
         locker_cost = {node: 1 for node in nodes_with_locker_locations}
@@ -383,8 +394,6 @@ if __name__ == """__main__""":
     # NEs_detected = find_equilibria_by_enumeration_for_two_players(location_actions, all_pairs_distances, population_per_node, alpha, beta)
 
     ### Initialize the location decisions of the players
-    max_iterations = 100
-    find_one_or_return_all = 'one'
     if os.path.exists(pickle_path):
         print("Loading NEs from pickle")
         with open(pickle_path, "rb") as pickle_file:
@@ -404,10 +413,11 @@ if __name__ == """__main__""":
         smallest_overall_payoff_equilibrium, largest_payoff_equilibrium = min(sum(x[1]) for x in equilibria_actions_and_payoffs), max(sum(x[1]) for x in equilibria_actions_and_payoffs)
         price_of_anarchy = SO_payoff / smallest_overall_payoff_equilibrium
         price_of_stability = SO_payoff / largest_payoff_equilibrium
-        info_str = f"""{len(SO_action)} different equilibria have been found
-                       Computational time: {computation_time} minutes
-                       Price of Anarchy: {price_of_anarchy}
-                       Price of Stability: {price_of_stability}"""
+        info_str = info1_str + f"""
+{len(SO_action)} different equilibria have been found
+Computational time: {computation_time} minutes
+Price of Anarchy: {price_of_anarchy}
+Price of Stability: {price_of_stability}"""
         print(info_str)
         with open(current_folder+"/NEs_analysis2.txt", "w") as text_file:
             text_file.write(info_str)
