@@ -32,6 +32,12 @@ def tqdm_joblib(tqdm_object):
         joblib.parallel.BatchCompletionCallBack = old_batch_callback
         tqdm_object.close()
 
+def check_couples_first_coincide_and_second_too(tuples_list):
+    for i in range(len(tuples_list)):
+        for j in range(i + 1, len(tuples_list)):
+            if tuples_list[i][0] == tuples_list[j][0] and tuples_list[i][1] != tuples_list[j][1]:
+                return False
+    return True
 
 def find_all_maxima_in_dict(dictionary):
     """
@@ -155,14 +161,7 @@ def solve_game_by_RSOC(other_player_locations, population_per_node, utilities, l
         model.addConstr(z[dd] == 1 + 
                         sum(utilities[dd, ll] for ll in other_player_locations) + 
                         grb.quicksum(utilities[dd, ll] * x[ll] for ll in locker_nodes), f"z_{dd}")
-
-    # root = {dd : np.sqrt(0.5 + 0.5 * sum(utilities[dd, ll] for ll in other_player_locations)) 
-    #         for dd in districts}
-
-    for dd in districts:
-        # model.addConstr(([-t[dd], z[dd], root[dd]] in grb.GRB.RSOC), f"cone_{dd}")
-        # model.addConstr(t[dd] * z[dd] >= -1/2 * root[dd]**2, f"rsoc_{dd}")
-        model.addConstr( - z[dd] * t[dd] >= 1 + sum(utilities[dd, ll] for ll in other_player_locations), f"rsoc_{dd}")
+        model.addConstr( - z[dd] * t[dd] >= 1 + sum(utilities[dd, ll] for ll in other_player_locations), f"rsoc_{dd}")     
 
     # Objective
     model.setObjective(grb.quicksum(population_per_node[dd] * (1 + t[dd]) for dd in districts), grb.GRB.MAXIMIZE)
@@ -181,14 +180,23 @@ def solve_game_by_RSOC(other_player_locations, population_per_node, utilities, l
     else:
         print(f"Optimization ended with status {status}")
 
+    payoff = 0.0
+    chosen_lockers = [ll for ll in locker_nodes if x[ll].X > 1.0 - 1e-5]
+    all_lockers = list(chosen_lockers) + list(other_player_locations)
+    for locker in chosen_lockers:
+        for district in districts:
+            payoff += population_per_node[district] * utilities[district, locker] / (1 + sum(utilities[district, locker] for locker in all_lockers))
+    return tuple(chosen_lockers), payoff
+
     # Return the values of x
-    return tuple([ll for ll in locker_nodes if x[ll].X == 1.0]), model.objVal
+    # assert (len([ll for ll in locker_nodes if x[ll].X > 1.0 - 1e-5]) > 0) == (model.objVal > 0), "Positive objective function for no open locker"
+    # return tuple([ll for ll in locker_nodes if x[ll].X > 1.0 - 1e-5]), model.objVal
 
 def game_simulation_with_initial_actions_given(playing_style, solution_method, number_of_lockers_per_player, population_per_node, utilities, initial_location_actions, max_iterations, printing=False):
     
-    new_location_player_dict, new_payoff_player_dict = [None, None], [0,0]
+    new_location_player_dict, new_payoff_player_dict = [None, None], [None,None]
     current_location_actions = initial_location_actions.copy()
-    current_payoffs = [0,0]#{player: 0 for player in range(len(number_of_lockers_per_player))}
+    current_payoffs = [payoff_per_location_decision(current_location_actions[0], current_location_actions, 0, population_per_node, utilities), payoff_per_location_decision(current_location_actions[1], current_location_actions, 1, population_per_node, utilities)]
     history_location_actions = []
     player_for_sequential = 0
     iteration = 0
@@ -233,8 +241,8 @@ def game_simulation_with_initial_actions_given(playing_style, solution_method, n
         if iteration == max_iterations:
             print("Maximum iterations reached")
             convergence_or_cycle = "MAX_ITERATIONS"
-        if current_location_actions in history_location_actions:
-            if current_location_actions == history_location_actions[-1]:
+        if tuple(current_location_actions) in history_location_actions:
+            if tuple(current_location_actions) == history_location_actions[-1]:
                 convergence_or_cycle = "CONVERGED"
                 if printing:
                     print(f"Iteration {iteration}: CONVERGED")
@@ -243,7 +251,7 @@ def game_simulation_with_initial_actions_given(playing_style, solution_method, n
                 if printing:
                     print(f"Iteration {iteration}: CYCLE DETECTED")
             break
-        history_location_actions.append(current_location_actions)
+        history_location_actions.append(tuple(current_location_actions))
         if printing:
             print(f"Iteration {iteration}: {current_location_actions}")
         # if number_of_players == 2:
@@ -269,9 +277,22 @@ def find_equilibria_by_RSOC_for_all_initial_combinations(location_actions, popul
     iterations_counter = 0
 
     if find_one_or_return_all == 'all':
+        results_of_game_simulations = []
+        # for initial_action_player_0 in location_actions[0]: 
+        #     for initial_action_player_1 in location_actions[1]:
+        #         print(f"\nCombination {iterations_counter}/{number_of_initial_combinations}")
+        #         initial_location_actions = [initial_action_player_0, initial_action_player_1]
+        #         current_actions, current_payoffs, convergence_or_cycle = game_simulation_with_initial_actions_given('sequential', 'RSOC', number_of_lockers_per_player, population_per_node, utilities, initial_location_actions, max_iterations, True)
+        #         if current_actions in [actions for actions, _ in results_of_game_simulations] and convergence_or_cycle == "CONVERGED":
+        #             payoffs = [payoffs for actions, payoffs in results_of_game_simulations if actions == current_actions]
+        #             if current_payoffs not in payoffs:
+        #                 raise ValueError(f"Converged with different payoffs: {current_payoffs} vs {payoffs}")
+        #         results_of_game_simulations.append((current_actions, current_payoffs))
+        #         iterations_counter += 1
         with tqdm_joblib(tqdm(desc="Progress", total=number_of_initial_combinations)) as progress_bar:
             results_of_game_simulations = Parallel(n_jobs=3, verbose=0)(delayed(game_simulation_with_initial_actions_given)('sequential', 'RSOC', number_of_lockers_per_player, population_per_node, utilities, [initial_action_player_0, initial_action_player_1], max_iterations) for initial_action_player_0 in location_actions[0] for initial_action_player_1 in location_actions[1])
-            return {tuple(result[:2]) for result in results_of_game_simulations if result[2] == "CONVERGED"}
+        assert check_couples_first_coincide_and_second_too(results_of_game_simulations), "First coincide and second not"
+        return {tuple(result[:2]) for result in results_of_game_simulations if result[2] == "CONVERGED"}
     elif find_one_or_return_all == 'one':    
         for initial_action_player_0 in location_actions[0]:
             for initial_action_player_1 in location_actions[1]:
@@ -375,7 +396,7 @@ if __name__ == """__main__""":
     utilities = {(district, locker): np.exp(alpha[district] - beta * all_pairs_distances[locker][district]) for district in all_pairs_distances.keys() for locker in nodes_with_locker_locations}
 
     info1_str = f"""
-Maximal distance: {max(all_pairs_distances[locker][district] for locker in nodes_with_locker_locations for district in all_pairs_distances.keys())} 
+Maximal distance between locker and district: {max(all_pairs_distances[locker][district] for locker in nodes_with_locker_locations for district in all_pairs_distances.keys())} 
 Lockers per player: {number_of_lockers_per_player}
 Number of intersections: {len(G.nodes)} 
 Number of locker locations: {len(nodes_with_locker_locations)}
@@ -418,6 +439,10 @@ Some utilities: {random.sample(list(utilities.items()), 5)}
 Computational time: {computation_time} minutes
 Price of Anarchy: {price_of_anarchy}
 Price of Stability: {price_of_stability}"""
+        for idx, (equilibrium, payoff) in enumerate(equilibria_actions_and_payoffs):
+            info_str += f"\nEquilibrium {idx}: {equilibrium} with payoff {payoff}"
+            info_str += f"\nCoincident lockers: {len(set(equilibrium[0]).intersection(set(equilibrium[1])))}"
+            info_str += f"\nDistances between lockers: {[all_pairs_distances[locker1][locker2] for locker1, locker2 in combinations(equilibrium[0]+equilibrium[1], 2)]}\n"
         print(info_str)
         with open(current_folder+"/NEs_analysis2.txt", "w") as text_file:
             text_file.write(info_str)
