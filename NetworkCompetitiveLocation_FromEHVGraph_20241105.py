@@ -314,12 +314,56 @@ def find_equilibria_by_RSOC_for_all_initial_combinations(location_actions, popul
         print("No Nash Equilibrium detected")
     return current_equilibria
 
-def find_social_optimum_by_RSOC(population_per_node, utilities, locker_cost, number_of_lockers_per_player):
-    ### Initialize the location decisions of the players
-    return solve_game_by_RSOC([], population_per_node, utilities, locker_cost, sum(number_of_lockers_per_player))    
+def find_social_optimum_by_RSOC(population_per_node, utilities, locker_cost, budgets):
+    
+    districts = population_per_node.keys()
+    locker_nodes = locker_cost.keys()
+
+    model = grb.Model()
+    model.setParam('OutputFlag', 0)  # Set silent mode
+
+    # Variables
+    x = model.addVars(locker_nodes, vtype=grb.GRB.BINARY, name="x")
+    y = model.addVars(locker_nodes, vtype=grb.GRB.BINARY, name="y")
+    t = model.addVars(districts, lb=-np.inf, ub=0, name="t")
+    z = model.addVars(districts, lb=0, name="z")
+
+    # Constraints
+    model.addConstr(grb.quicksum(cost_ll * x[ll] for ll, cost_ll in locker_cost.items()) <= budgets[0], "budget")
+    model.addConstr(grb.quicksum(cost_ll * y[ll] for ll, cost_ll in locker_cost.items()) <= budgets[1], "budget")
+
+    for dd in districts:
+        model.addConstr(z[dd] == 1 + 
+                        grb.quicksum(utilities[dd, ll] * x[ll] for ll in locker_nodes) + 
+                        grb.quicksum(utilities[dd, ll] * y[ll] for ll in locker_nodes), f"z_{dd}")
+        model.addConstr( - z[dd] * t[dd] >= 1, f"rsoc_{dd}")     
+
+    # Objective
+    model.setObjective(grb.quicksum(population_per_node[dd] * (1 + t[dd]) for dd in districts), grb.GRB.MAXIMIZE)
+
+    # Optimize
+    model.optimize()
+
+    # Check the optimization status
+    status = model.Status
+    if status == grb.GRB.Status.OPTIMAL:
+        pass
+    elif status == grb.GRB.Status.INFEASIBLE:
+        print("Model is infeasible")
+    elif status == grb.GRB.Status.UNBOUNDED:
+        print("Model is unbounded")
+    else:
+        print(f"Optimization ended with status {status}")
+
+    payoff = 0.0
+    all_lockers = [ll for ll in locker_nodes if x[ll].X > 1.0 - 1e-5] + [ll for ll in locker_nodes if y[ll].X > 1.0 - 1e-5]
+    for locker in all_lockers:
+        for district in districts:
+            payoff += population_per_node[district] * utilities[district, locker] / (1 + sum(utilities[district, locker] for locker in all_lockers))
+    return tuple([[ll for ll in locker_nodes if x[ll].X > 1.0 - 1e-5], [ll for ll in locker_nodes if y[ll].X > 1.0 - 1e-5]]), payoff  
 
 
-def plot_simulation_state(G, current_actions):
+def plot_simulation_state(G, current_actions, filename=None):
     
     colors = ['blue', 'orange', 'olive', 'magenta', 'cyan', 'yellow',
                 'purple', 'brown', 'pink', 'green', 'lime', 'navy',
@@ -351,6 +395,9 @@ def plot_simulation_state(G, current_actions):
             circle_color = players[idx_player]
             circle = plt.Circle(node_position, circle_radius, color=circle_color, zorder=number_of_players-idx_player)
             ax.add_patch(circle)
+
+    if filename:
+        plt.savefig(filename)
     plt.show()
 
 
@@ -450,4 +497,4 @@ Price of Stability: {price_of_stability}"""
         print("Find one or return all not recognized")
 
 
-    plot_simulation_state(G, equilibria_actions_and_payoffs.pop()[0])
+    plot_simulation_state(G, equilibria_actions_and_payoffs.pop()[0], filename=current_folder + "/NEs_analysis.png")
