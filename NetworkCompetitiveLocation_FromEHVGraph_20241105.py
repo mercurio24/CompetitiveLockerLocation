@@ -2,7 +2,6 @@ import networkx as nx
 import osmnx as ox
 import os
 import matplotlib.pyplot as plt
-from matplotlib.widgets import Slider
 from itertools import combinations, chain
 import random
 import numpy as np
@@ -329,8 +328,8 @@ def find_social_optimum_by_RSOC(population_per_node, utilities, locker_cost, bud
     z = model.addVars(districts, lb=0, name="z")
 
     # Constraints
-    model.addConstr(grb.quicksum(cost_ll * x[ll] for ll, cost_ll in locker_cost.items()) <= budgets[0], "budget")
-    model.addConstr(grb.quicksum(cost_ll * y[ll] for ll, cost_ll in locker_cost.items()) <= budgets[1], "budget")
+    model.addConstr(grb.quicksum(cost_ll * x[ll] for ll, cost_ll in locker_cost.items()) <= budgets[0], "budget1")
+    model.addConstr(grb.quicksum(cost_ll * y[ll] for ll, cost_ll in locker_cost.items()) <= budgets[1], "budget2")
 
     for dd in districts:
         model.addConstr(z[dd] == 1 + 
@@ -373,28 +372,90 @@ def plot_simulation_state(G, current_actions, filename=None):
     located_lockers = list(chain(*current_actions))
 
     colors_per_node_with_players = {node: [colors[player] for player in range(number_of_players) if node in current_actions[player]] for node in G.nodes() if node in located_lockers}
-    node_colors = ['red' if data.get('locker_possible') == 'locker' else 'black' for _, data in G.nodes(data=True)]
-    node_sizes = [50 if data.get('locker_possible') == 'locker' else 10 for _, data in G.nodes(data=True)]
+    # node_colors = ['red' if data.get('locker_possible') == 'locker' else 'black' for _, data in G.nodes(data=True)]
+    # node_sizes = [50 if data.get('locker_possible') == 'locker' else 10 for _, data in G.nodes(data=True)]
             
 
+    # print("Color and size map created")
+
+    # from matplotlib.patches import Ellipse
+    # ### Plot the graph
+    # fig, ax = ox.plot_graph(G, 
+    #                         node_color=node_colors, 
+    #                         node_size=node_sizes, 
+    #                         edge_color='black', 
+    #                         bgcolor='white', 
+    #                         show=False, 
+    #                         close=False)
+    
     print("Color and size map created")
 
+    from matplotlib.patches import Rectangle, Polygon
     ### Plot the graph
     fig, ax = ox.plot_graph(G, 
-                            node_color=node_colors, 
-                            node_size=node_sizes, 
-                            edge_color='black', 
+                            edge_color='grey', 
                             bgcolor='white', 
+                            node_color='black',
+                            node_size=15,
                             show=False, 
                             close=False)
-    plt.axis("equal")
-    for node, players in colors_per_node_with_players.items():
-        node_position = (G.nodes(data=True)[node]['x'], G.nodes(data=True)[node]['y'])  
-        for idx_player in range(len(players)-1,-1,-1):
-            circle_radius = 2e-4+1.5e-4*idx_player
-            circle_color = players[idx_player]
-            circle = plt.Circle(node_position, circle_radius, color=circle_color, zorder=number_of_players-idx_player)
-            ax.add_patch(circle)
+    limits_x_axis = ax.get_xlim()[1] - ax.get_xlim()[0]
+    limits_y_axis = ax.get_ylim()[1] - ax.get_ylim()[0]
+    for locker in [locker for locker, data in G.nodes(data=True) if data.get('locker_possible') == 'locker' and locker not in located_lockers]:
+        locker_position = (G.nodes(data=True)[locker]['x'], G.nodes(data=True)[locker]['y'])
+        x_side = 2e-2 * (ax.get_xlim()[1] - ax.get_xlim()[0]) * 1.15
+        y_side = 2e-2 * (ax.get_ylim()[1] - ax.get_ylim()[0])
+        locker_rectangle = Rectangle(locker_position, width=x_side, height=y_side, facecolor='gray', edgecolor='black')
+        ax.add_patch(locker_rectangle)
+
+    rectangle_increase = 1.5e-2
+    if number_of_players == 1 or number_of_players > 2:
+        for node, players in colors_per_node_with_players.items():
+            for idx_player in range(len(players)-1,-1,-1):
+                rectangle_side_size = 2.5e-2 + rectangle_increase * idx_player
+                x_side = rectangle_side_size * limits_x_axis * 1.15
+                y_side = rectangle_side_size * limits_y_axis
+                locker_position = (G.nodes(data=True)[node]['x'], G.nodes(data=True)[node]['y'])  
+                locker_position = (locker_position[0] - x_side/2, locker_position[1]- y_side/2)
+                print(f"idx player: {idx_player}, Rectangle side size: {rectangle_side_size}, locker position: {locker_position}, x_side: {x_side}, y_side: {y_side}, facecolor: {players[idx_player]}")	
+                locker_rectangle = Rectangle(locker_position, width=x_side, height=y_side, facecolor=players[idx_player], edgecolor='black', zorder = number_of_players-idx_player)
+                ax.add_patch(locker_rectangle)
+    if number_of_players == 2:
+        for node, players in colors_per_node_with_players.items():
+            if len(players) == 1:
+                rectangle_side_size = 3e-2
+                x_side = rectangle_side_size * limits_x_axis * 1.15
+                y_side = rectangle_side_size * limits_y_axis
+                locker_position = (G.nodes(data=True)[node]['x'], G.nodes(data=True)[node]['y'])  
+                locker_position = (locker_position[0] - x_side/2, locker_position[1]- y_side/2)
+                locker_rectangle = Rectangle(locker_position, width=x_side, height=y_side, facecolor=players[0], edgecolor='black')
+                ax.add_patch(locker_rectangle)
+            if len(players) == 2:
+                rectangle_side_size = 3e-2
+                x_side = rectangle_side_size * limits_x_axis * 1.15
+                y_side = rectangle_side_size * limits_y_axis
+                locker_position = (G.nodes(data=True)[node]['x'], G.nodes(data=True)[node]['y'])  
+                locker_position = (locker_position[0] - x_side/2, locker_position[1] - y_side/2)
+                
+                # Define the vertices of the two triangles
+                triangle1 = [(locker_position[0], locker_position[1]), 
+                            (locker_position[0] + x_side, locker_position[1]), 
+                            (locker_position[0], locker_position[1] + y_side)]
+                triangle2 = [(locker_position[0] + x_side, locker_position[1]), 
+                            (locker_position[0] + x_side, locker_position[1] + y_side), 
+                            (locker_position[0], locker_position[1] + y_side)]
+                
+                # Create the two triangles with different colors
+                triangle1_patch = Polygon(triangle1, facecolor=players[0], edgecolor='black')
+                triangle2_patch = Polygon(triangle2, facecolor=players[1], edgecolor='black')
+                
+                ax.add_patch(triangle1_patch)
+                ax.add_patch(triangle2_patch)
+        
+
+
+
+        print()
 
     if filename:
         plt.savefig(filename)
@@ -433,10 +494,10 @@ if __name__ == """__main__""":
     population_per_node = {node: round(float(data.get('node_population'))) for node, data in G.nodes(data=True)}
 
     ### Define the parameters of the players: Players are 0, 1, ..., n_players-1
-    number_of_lockers_per_player = [1, 1]#{player: 2 for player in range(number_of_players)}
+    number_of_lockers_per_player = [4, 6]#{player: 2 for player in range(number_of_players)}
     pickle_path = current_folder + f"/NEs_analysis_{number_of_lockers_per_player[0]}_{number_of_lockers_per_player[1]}.pkl"
     max_iterations = 100
-    find_one_or_return_all = 'all'
+    find_one_or_return_all = 'one'
     number_of_players = len(number_of_lockers_per_player)
     alpha = {district : 3 for district in G.nodes}
     beta = 1e-2
@@ -474,6 +535,7 @@ Some utilities: {random.sample(list(utilities.items()), 5)}
         with open(pickle_path, "wb") as pickle_file:
             joblib.dump((equilibria_actions_and_payoffs, number_of_lockers_per_player), pickle_file, compress=3)
     SO_action, SO_payoff = find_social_optimum_by_RSOC(population_per_node, utilities, locker_cost, number_of_lockers_per_player)
+    info1_str += f"Social optimum: {SO_action} with payoff {SO_payoff}\n"
     if find_one_or_return_all == 'one':
         price_of_anarchy = SO_payoff / sum(payoff_per_location_decision(equilibria_actions_and_payoffs[0][0][player], equilibria_actions_and_payoffs[0][0], player, population_per_node, utilities) for player in [0,1])
         print(f"Price of Anarchy: {price_of_anarchy}")
