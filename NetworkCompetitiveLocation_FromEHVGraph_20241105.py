@@ -364,29 +364,17 @@ def find_social_optimum_by_RSOC(population_per_node, utilities, locker_cost, bud
 
 def plot_simulation_state(G, current_actions, filename=None):
     
-    colors = ['blue', 'orange', 'olive', 'magenta', 'cyan', 'yellow',
+    colors = ['red', 'blue', 'magenta', 'orange', 'olive',  'cyan', 
                 'purple', 'brown', 'pink', 'green', 'lime', 'navy',
                 'teal', 'maroon', 'aqua', 'fuchsia']
     
     number_of_players = len(current_actions)
     located_lockers = list(chain(*current_actions))
 
+    probability_district_served_by_a_locker = [sum(utilities[district, locker] for locker in located_lockers) / (1 + sum(utilities[district, locker] for locker in located_lockers)) for district in G.nodes]
+    populations = [round(float(data.get('node_population'))) * 2 for node, data in G.nodes(data=True)]
+
     colors_per_node_with_players = {node: [colors[player] for player in range(number_of_players) if node in current_actions[player]] for node in G.nodes() if node in located_lockers}
-    # node_colors = ['red' if data.get('locker_possible') == 'locker' else 'black' for _, data in G.nodes(data=True)]
-    # node_sizes = [50 if data.get('locker_possible') == 'locker' else 10 for _, data in G.nodes(data=True)]
-            
-
-    # print("Color and size map created")
-
-    # from matplotlib.patches import Ellipse
-    # ### Plot the graph
-    # fig, ax = ox.plot_graph(G, 
-    #                         node_color=node_colors, 
-    #                         node_size=node_sizes, 
-    #                         edge_color='black', 
-    #                         bgcolor='white', 
-    #                         show=False, 
-    #                         close=False)
     
     print("Color and size map created")
 
@@ -396,16 +384,17 @@ def plot_simulation_state(G, current_actions, filename=None):
                             edge_color='grey', 
                             bgcolor='white', 
                             node_color='black',
-                            node_size=15,
+                            node_size=populations,
+                            node_alpha=probability_district_served_by_a_locker,
                             show=False, 
                             close=False)
     limits_x_axis = ax.get_xlim()[1] - ax.get_xlim()[0]
     limits_y_axis = ax.get_ylim()[1] - ax.get_ylim()[0]
     for locker in [locker for locker, data in G.nodes(data=True) if data.get('locker_possible') == 'locker' and locker not in located_lockers]:
         locker_position = (G.nodes(data=True)[locker]['x'], G.nodes(data=True)[locker]['y'])
-        x_side = 2e-2 * (ax.get_xlim()[1] - ax.get_xlim()[0]) * 1.15
-        y_side = 2e-2 * (ax.get_ylim()[1] - ax.get_ylim()[0])
-        locker_rectangle = Rectangle(locker_position, width=x_side, height=y_side, facecolor='gray', edgecolor='black')
+        x_side = 2.5e-2 * (ax.get_xlim()[1] - ax.get_xlim()[0]) * 1.15
+        y_side = 2.5e-2 * (ax.get_ylim()[1] - ax.get_ylim()[0])
+        locker_rectangle = Rectangle(locker_position, width=x_side, height=y_side, facecolor='white', edgecolor='black')
         ax.add_patch(locker_rectangle)
 
     rectangle_increase = 1.5e-2
@@ -423,7 +412,7 @@ def plot_simulation_state(G, current_actions, filename=None):
     if number_of_players == 2:
         for node, players in colors_per_node_with_players.items():
             if len(players) == 1:
-                rectangle_side_size = 3e-2
+                rectangle_side_size = 2.5e-2
                 x_side = rectangle_side_size * limits_x_axis * 1.15
                 y_side = rectangle_side_size * limits_y_axis
                 locker_position = (G.nodes(data=True)[node]['x'], G.nodes(data=True)[node]['y'])  
@@ -431,7 +420,7 @@ def plot_simulation_state(G, current_actions, filename=None):
                 locker_rectangle = Rectangle(locker_position, width=x_side, height=y_side, facecolor=players[0], edgecolor='black')
                 ax.add_patch(locker_rectangle)
             if len(players) == 2:
-                rectangle_side_size = 3e-2
+                rectangle_side_size = 2.5e-2
                 x_side = rectangle_side_size * limits_x_axis * 1.15
                 y_side = rectangle_side_size * limits_y_axis
                 locker_position = (G.nodes(data=True)[node]['x'], G.nodes(data=True)[node]['y'])  
@@ -558,5 +547,6 @@ Price of Stability: {price_of_stability}"""
     else:
         print("Find one or return all not recognized")
 
+    analysis_state = equilibria_actions_and_payoffs.pop()[0]
 
-    plot_simulation_state(G, equilibria_actions_and_payoffs.pop()[0], filename=current_folder + "/NEs_analysis.png")
+    plot_simulation_state(G, analysis_state, filename=current_folder + "/NEs_analysis.pdf")
