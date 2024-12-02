@@ -12,6 +12,7 @@ from joblib import Parallel, delayed
 import joblib
 from contextlib import contextmanager
 from tqdm import tqdm
+from datetime import datetime
 
 random.seed(28)
 
@@ -277,19 +278,12 @@ def find_equilibria_by_RSOC_for_all_initial_combinations(location_actions, popul
 
     if find_one_or_return_all == 'all':
         results_of_game_simulations = []
-        # for initial_action_player_0 in location_actions[0]: 
-        #     for initial_action_player_1 in location_actions[1]:
-        #         print(f"\nCombination {iterations_counter}/{number_of_initial_combinations}")
-        #         initial_location_actions = [initial_action_player_0, initial_action_player_1]
-        #         current_actions, current_payoffs, convergence_or_cycle = game_simulation_with_initial_actions_given('sequential', 'RSOC', number_of_lockers_per_player, population_per_node, utilities, initial_location_actions, max_iterations, True)
-        #         if current_actions in [actions for actions, _ in results_of_game_simulations] and convergence_or_cycle == "CONVERGED":
-        #             payoffs = [payoffs for actions, payoffs in results_of_game_simulations if actions == current_actions]
-        #             if current_payoffs not in payoffs:
-        #                 raise ValueError(f"Converged with different payoffs: {current_payoffs} vs {payoffs}")
-        #         results_of_game_simulations.append((current_actions, current_payoffs))
-        #         iterations_counter += 1
-        with tqdm_joblib(tqdm(desc="Progress", total=number_of_initial_combinations)) as progress_bar:
-            results_of_game_simulations = Parallel(n_jobs=3, verbose=0)(delayed(game_simulation_with_initial_actions_given)('sequential', 'RSOC', number_of_lockers_per_player, population_per_node, utilities, [initial_action_player_0, initial_action_player_1], max_iterations) for initial_action_player_0 in location_actions[0] for initial_action_player_1 in location_actions[1])
+        n_jobs = 1
+        if n_jobs == 1:
+            results_of_game_simulations = Parallel(n_jobs=1, verbose=0)(delayed(game_simulation_with_initial_actions_given)('sequential', 'RSOC', number_of_lockers_per_player, population_per_node, utilities, [initial_action_player_0, initial_action_player_1], max_iterations) for initial_action_player_0 in location_actions[0] for initial_action_player_1 in location_actions[1])
+        if n_jobs != 1:
+            with tqdm_joblib(tqdm(desc="Progress", total=number_of_initial_combinations)) as progress_bar:
+                results_of_game_simulations = Parallel(n_jobs=1, verbose=0)(delayed(game_simulation_with_initial_actions_given)('sequential', 'RSOC', number_of_lockers_per_player, population_per_node, utilities, [initial_action_player_0, initial_action_player_1], max_iterations) for initial_action_player_0 in location_actions[0] for initial_action_player_1 in location_actions[1])
         assert check_couples_first_coincide_and_second_too(results_of_game_simulations), "First coincide and second not"
         return {tuple(result[:2]) for result in results_of_game_simulations if result[2] == "CONVERGED"}
     elif find_one_or_return_all == 'one':    
@@ -354,15 +348,15 @@ def find_social_optimum_by_RSOC(population_per_node, utilities, locker_cost, bud
     else:
         print(f"Optimization ended with status {status}")
 
-    payoff = 0.0
+    social_payoff = 0.0
     all_lockers = [ll for ll in locker_nodes if x[ll].X > 1.0 - 1e-5] + [ll for ll in locker_nodes if y[ll].X > 1.0 - 1e-5]
     for locker in all_lockers:
         for district in districts:
-            payoff += population_per_node[district] * utilities[district, locker] / (1 + sum(utilities[district, locker] for locker in all_lockers))
-    return tuple([[ll for ll in locker_nodes if x[ll].X > 1.0 - 1e-5], [ll for ll in locker_nodes if y[ll].X > 1.0 - 1e-5]]), payoff  
+            social_payoff += population_per_node[district] * utilities[district, locker] / (1 + sum(utilities[district, locker] for locker in all_lockers))
+    return tuple([[ll for ll in locker_nodes if x[ll].X > 1.0 - 1e-5], [ll for ll in locker_nodes if y[ll].X > 1.0 - 1e-5]]), social_payoff  
 
 
-def plot_simulation_state(G, current_actions, filename=None):
+def plot_simulation_state(graph, current_actions, filename=None, show=True):
     
     colors = ['red', 'blue', 'magenta', 'orange', 'olive',  'cyan', 
                 'purple', 'brown', 'pink', 'green', 'lime', 'navy',
@@ -371,16 +365,16 @@ def plot_simulation_state(G, current_actions, filename=None):
     number_of_players = len(current_actions)
     located_lockers = list(chain(*current_actions))
 
-    probability_district_served_by_a_locker = [sum(utilities[district, locker] for locker in located_lockers) / (1 + sum(utilities[district, locker] for locker in located_lockers)) for district in G.nodes]
-    populations = [round(float(data.get('node_population'))) * 2 for node, data in G.nodes(data=True)]
+    probability_district_served_by_a_locker = [sum(utilities[district, locker] for locker in located_lockers) / (1 + sum(utilities[district, locker] for locker in located_lockers)) for district in graph.nodes]
+    populations = [round(float(data.get('node_population'))) * 2 for node, data in graph.nodes(data=True)]
 
-    colors_per_node_with_players = {node: [colors[player] for player in range(number_of_players) if node in current_actions[player]] for node in G.nodes() if node in located_lockers}
+    colors_per_node_with_players = {node: [colors[player] for player in range(number_of_players) if node in current_actions[player]] for node in graph.nodes() if node in located_lockers}
     
     print("Color and size map created")
 
     from matplotlib.patches import Rectangle, Polygon
     ### Plot the graph
-    fig, ax = ox.plot_graph(G, 
+    fig, ax = ox.plot_graph(graph, 
                             edge_color='grey', 
                             bgcolor='white', 
                             node_color='black',
@@ -390,10 +384,13 @@ def plot_simulation_state(G, current_actions, filename=None):
                             close=False)
     limits_x_axis = ax.get_xlim()[1] - ax.get_xlim()[0]
     limits_y_axis = ax.get_ylim()[1] - ax.get_ylim()[0]
-    for locker in [locker for locker, data in G.nodes(data=True) if data.get('locker_possible') == 'locker' and locker not in located_lockers]:
-        locker_position = (G.nodes(data=True)[locker]['x'], G.nodes(data=True)[locker]['y'])
-        x_side = 2.5e-2 * (ax.get_xlim()[1] - ax.get_xlim()[0]) * 1.15
-        y_side = 2.5e-2 * (ax.get_ylim()[1] - ax.get_ylim()[0])
+    rectangle_side_size = 2.5e-2
+
+
+    x_side = rectangle_side_size * (ax.get_xlim()[1] - ax.get_xlim()[0]) * 1.15
+    y_side = rectangle_side_size * (ax.get_ylim()[1] - ax.get_ylim()[0])
+    for locker in [locker for locker, data in graph.nodes(data=True) if data.get('locker_possible') == 'locker' and locker not in located_lockers]:
+        locker_position = (graph.nodes(data=True)[locker]['x'] - x_side/2, graph.nodes(data=True)[locker]['y'] - y_side/2)
         locker_rectangle = Rectangle(locker_position, width=x_side, height=y_side, facecolor='white', edgecolor='black')
         ax.add_patch(locker_rectangle)
 
@@ -404,7 +401,7 @@ def plot_simulation_state(G, current_actions, filename=None):
                 rectangle_side_size = 2.5e-2 + rectangle_increase * idx_player
                 x_side = rectangle_side_size * limits_x_axis * 1.15
                 y_side = rectangle_side_size * limits_y_axis
-                locker_position = (G.nodes(data=True)[node]['x'], G.nodes(data=True)[node]['y'])  
+                locker_position = (graph.nodes(data=True)[node]['x'], graph.nodes(data=True)[node]['y'])  
                 locker_position = (locker_position[0] - x_side/2, locker_position[1]- y_side/2)
                 print(f"idx player: {idx_player}, Rectangle side size: {rectangle_side_size}, locker position: {locker_position}, x_side: {x_side}, y_side: {y_side}, facecolor: {players[idx_player]}")	
                 locker_rectangle = Rectangle(locker_position, width=x_side, height=y_side, facecolor=players[idx_player], edgecolor='black', zorder = number_of_players-idx_player)
@@ -412,19 +409,18 @@ def plot_simulation_state(G, current_actions, filename=None):
     if number_of_players == 2:
         for node, players in colors_per_node_with_players.items():
             if len(players) == 1:
-                rectangle_side_size = 2.5e-2
-                x_side = rectangle_side_size * limits_x_axis * 1.15
-                y_side = rectangle_side_size * limits_y_axis
-                locker_position = (G.nodes(data=True)[node]['x'], G.nodes(data=True)[node]['y'])  
-                locker_position = (locker_position[0] - x_side/2, locker_position[1]- y_side/2)
+                # x_side = rectangle_side_size * limits_x_axis * 1.15
+                # y_side = rectangle_side_size * limits_y_axis
+                locker_position = (graph.nodes(data=True)[node]['x'] - x_side/2, graph.nodes(data=True)[node]['y'] - y_side/2)  
+                # locker_position = (locker_position[0] , locker_position[1]- y_side/2)
                 locker_rectangle = Rectangle(locker_position, width=x_side, height=y_side, facecolor=players[0], edgecolor='black')
                 ax.add_patch(locker_rectangle)
             if len(players) == 2:
                 rectangle_side_size = 2.5e-2
-                x_side = rectangle_side_size * limits_x_axis * 1.15
-                y_side = rectangle_side_size * limits_y_axis
-                locker_position = (G.nodes(data=True)[node]['x'], G.nodes(data=True)[node]['y'])  
-                locker_position = (locker_position[0] - x_side/2, locker_position[1] - y_side/2)
+                # x_side = rectangle_side_size * limits_x_axis * 1.15
+                # y_side = rectangle_side_size * limits_y_axis
+                locker_position = (graph.nodes(data=True)[node]['x'] - x_side/2, graph.nodes(data=True)[node]['y'] - y_side/2)  
+                # locker_position = (locker_position[0] - x_side/2, locker_position[1] - y_side/2)
                 
                 # Define the vertices of the two triangles
                 triangle1 = [(locker_position[0], locker_position[1]), 
@@ -440,79 +436,24 @@ def plot_simulation_state(G, current_actions, filename=None):
                 
                 ax.add_patch(triangle1_patch)
                 ax.add_patch(triangle2_patch)
-        
-
-
-
         print()
 
     if filename:
         plt.savefig(filename)
-    plt.show()
+    if show:
+        plt.show()
 
-
-if __name__ == """__main__""":
-
-    # Get the directory name of the current file
-    current_file_path = os.path.abspath(__file__)
-    current_folder = os.path.dirname(current_file_path)
-    graph_path = os.path.dirname(current_folder) + "/RealGraphCreation/eindhoven_with_districts_Binnenstad_Witte Dame_Bergen.graphml"
-    playing_style = 'sequential' # 'simultaneous' or 'sequential'
-    solution_method = 'RSOC' # 'enumeration' or 'RSOC'
-
-    ### Load the graph
-    G = ox.load_graphml(graph_path)
-    if nx.is_directed(G):
-        G = G.to_undirected()
-
-    # Find all connected components
-    connected_components = list(nx.connected_components(G))
-    # Find the largest connected component
-    largest_component = max(connected_components, key=len)
-    # Create a subgraph containing only the largest connected component
-    G = G.subgraph(largest_component).copy()
-    all_nodes = list(G.nodes)
-
-    # Calculate shortest path lengths among all pairs of nodes
-    print("Calculating all pairs shortest path lengths")
-    all_pairs_distances = dict(nx.all_pairs_dijkstra_path_length(G, weight='length'))
-    print("Finished calculating all pairs shortest path lengths")
-
-    ### Get the nodes with possible lockers
-    nodes_with_locker_locations = [node for node, data in G.nodes(data=True) if data.get('locker_possible') == 'locker']
-    population_per_node = {node: round(float(data.get('node_population'))) for node, data in G.nodes(data=True)}
-
-    ### Define the parameters of the players: Players are 0, 1, ..., n_players-1
-    number_of_lockers_per_player = [4, 6]#{player: 2 for player in range(number_of_players)}
-    pickle_path = current_folder + f"/NEs_analysis_{number_of_lockers_per_player[0]}_{number_of_lockers_per_player[1]}.pkl"
-    max_iterations = 100
-    find_one_or_return_all = 'one'
-    number_of_players = len(number_of_lockers_per_player)
-    alpha = {district : 3 for district in G.nodes}
-    beta = 1e-2
-    utilities = {(district, locker): np.exp(alpha[district] - beta * all_pairs_distances[locker][district]) for district in all_pairs_distances.keys() for locker in nodes_with_locker_locations}
-
+def game_solver(graph, pickle_path, location_actions, population_per_node, utilities, locker_cost, number_of_lockers_per_player, max_iterations, find_one_or_return_all, current_folder, pictures_filename, analysis_filename):
+    
     info1_str = f"""
 Maximal distance between locker and district: {max(all_pairs_distances[locker][district] for locker in nodes_with_locker_locations for district in all_pairs_distances.keys())} 
 Lockers per player: {number_of_lockers_per_player}
-Number of intersections: {len(G.nodes)} 
+Number of intersections: {len(graph.nodes)} 
 Number of locker locations: {len(nodes_with_locker_locations)}
-Alpha: {random.sample(list(alpha.items()), 5)}
-Beta: {beta}
 Some utilities: {random.sample(list(utilities.items()), 5)}
 """
-
-    if solution_method == 'RSOC':
-        locker_cost = {node: 1 for node in nodes_with_locker_locations}
-
-    ### Enumerate the actions
-    location_actions = {player : list(combinations(nodes_with_locker_locations, number_of_lockers_per_player[player])) for player in range(number_of_players)}
-
-    ### Check if a Nash Equilibrium exists by enumeration
-    # NEs_detected = find_equilibria_by_enumeration_for_two_players(location_actions, all_pairs_distances, population_per_node, alpha, beta)
-
-    ### Initialize the location decisions of the players
-    if os.path.exists(pickle_path):
+        
+    if os.path.exists(pickle_path) and find_one_or_return_all == "all":
         print("Loading NEs from pickle")
         with open(pickle_path, "rb") as pickle_file:
             equilibria_actions_and_payoffs, number_of_lockers_per_player = joblib.load(pickle_file)
@@ -542,11 +483,138 @@ Price of Stability: {price_of_stability}"""
             info_str += f"\nCoincident lockers: {len(set(equilibrium[0]).intersection(set(equilibrium[1])))}"
             info_str += f"\nDistances between lockers: {[all_pairs_distances[locker1][locker2] for locker1, locker2 in combinations(equilibrium[0]+equilibrium[1], 2)]}\n"
         print(info_str)
-        with open(current_folder+"/NEs_analysis2.txt", "w") as text_file:
+        with open(analysis_filename, "w") as text_file:
             text_file.write(info_str)
     else:
         print("Find one or return all not recognized")
 
+    
     analysis_state = equilibria_actions_and_payoffs.pop()[0]
 
-    plot_simulation_state(G, analysis_state, filename=current_folder + "/NEs_analysis.pdf")
+    plot_simulation_state(graph, analysis_state, filename=pictures_filename, show=False)
+
+def game_initializer_and_solver(graph, location_actions, all_pairs_distances, population_per_node, alpha_mean, alpha_std, beta, locker_cost, number_of_lockers_per_player, max_iterations, find_one_or_return_all, current_folder, pictures_folder, analysis_folder):
+    alpha = {district : np.random.normal(loc = alpha_mean, scale = alpha_std) for district in graph.nodes} #{district : 3 for district in graph.nodes}
+    pictures_filename = pictures_folder + f"/NEs_analysis_beta_{beta}_alpha_mean_{alpha_mean}.pdf"
+    analysis_filename = analysis_folder + f"/NEs_analysis_beta_{beta}_alpha_mean_{alpha_mean}.txt"
+    pickle_path = analysis_folder + f"/NEs_pickle_{number_of_lockers_per_player[0]}_{number_of_lockers_per_player[1]}_beta_{beta}_alpha_mean_{alpha_mean}.pkl"
+    utilities = {(district, locker): np.exp(alpha[district] - beta * all_pairs_distances[locker][district]) for district in all_pairs_distances.keys() for locker in nodes_with_locker_locations}
+    game_solver(graph, pickle_path, location_actions, population_per_node, utilities, locker_cost, number_of_lockers_per_player, max_iterations, find_one_or_return_all, current_folder, pictures_filename, analysis_filename)
+
+if __name__ == """__main__""":
+
+    # Get the directory name of the current file
+    current_file_path = os.path.abspath(__file__)
+    current_folder = os.path.dirname(current_file_path)
+    graph_path = os.path.dirname(current_folder) + "/RealGraphCreation/eindhoven_with_districts_Binnenstad_Witte Dame_Bergen.graphml"
+    playing_style = 'sequential' # 'simultaneous' or 'sequential'
+    solution_method = 'RSOC' # 'enumeration' or 'RSOC'
+
+    today = datetime.today().strftime('%Y%m%d')
+    pictures_folder = current_folder + f"/Pictures_Experiment_{today}"
+    analysis_folder = current_folder + f"/Analysis_Experiment_{today}"
+# Check whether the specified path exists or not
+    if not os.path.exists(pictures_folder):
+        # Create a new directory because it does not exist
+        os.makedirs(pictures_folder)
+        print(f"Directory {pictures_folder} created")
+    else:
+        print(f"Directory {pictures_folder} already exists")
+    if not os.path.exists(analysis_folder):
+        # Create a new directory because it does not exist
+        os.makedirs(analysis_folder)
+        print(f"Directory {analysis_folder} created")
+    else:
+        print(f"Directory {analysis_folder} already exists")
+
+    ### Load the graph
+    graph = ox.load_graphml(graph_path)
+    if nx.is_directed(graph):
+        graph = graph.to_undirected()
+
+    # Find all connected components
+    connected_components = list(nx.connected_components(graph))
+    # Find the largest connected component
+    largest_component = max(connected_components, key=len)
+    # Create a subgraph containing only the largest connected component
+    graph = graph.subgraph(largest_component).copy()
+    all_nodes = list(graph.nodes)
+
+    # Calculate shortest path lengths among all pairs of nodes
+    print("Calculating all pairs shortest path lengths")
+    all_pairs_distances = dict(nx.all_pairs_dijkstra_path_length(graph, weight='length'))
+    print("Finished calculating all pairs shortest path lengths")
+
+    ### Get the nodes with possible lockers
+    nodes_with_locker_locations = [node for node, data in graph.nodes(data=True) if data.get('locker_possible') == 'locker']
+    population_per_node = {node: round(float(data.get('node_population'))) for node, data in graph.nodes(data=True)}
+
+    ### Define the parameters of the players: Players are 0, 1, ..., n_players-1
+    number_of_lockers_per_player = [1,1]#{player: 2 for player in range(number_of_players)}
+    max_iterations = 100
+    find_one_or_return_all = 'all'
+    number_of_players = len(number_of_lockers_per_player)
+    alpha_means = [-100, -1.0, 0.0, 1.0]
+    alpha_std = 1.0
+    betas = [3e-5, 5e-5]
+    # utilities = {(district, locker): np.exp(alpha[district] - beta * all_pairs_distances[locker][district]) for district in all_pairs_distances.keys() for locker in nodes_with_locker_locations}
+
+    if solution_method == 'RSOC':
+        locker_cost = {node: 1 for node in nodes_with_locker_locations}
+
+    ### Enumerate the actions
+    location_actions = {player : list(combinations(nodes_with_locker_locations, number_of_lockers_per_player[player])) for player in range(number_of_players)}
+
+    ### Check if a Nash Equilibrium exists by enumeration
+    # NEs_detected = find_equilibria_by_enumeration_for_two_players(location_actions, all_pairs_distances, population_per_node, alpha, beta)
+
+    # for beta in betas:
+    #     for alpha_mean in alpha_means:
+    #         alpha = {district : np.random.normal(loc = alpha_mean, scale = alpha_std) for district in graph.nodes} #{district : 3 for district in graph.nodes}
+    #         pictures_filename = pictures_folder + f"/NEs_analysis_beta_{beta}_alpha_mean_{alpha_mean}.pdf"
+    #         analysis_filename = analysis_folder + f"/NEs_analysis_beta_{beta}_alpha_mean_{alpha_mean}.txt"
+    #         pickle_path = analysis_folder + f"/NEs_pickle_{number_of_lockers_per_player[0]}_{number_of_lockers_per_player[1]}_beta_{beta}_alpha_mean_{alpha_mean}.pkl"
+    #         utilities = {(district, locker): np.exp(alpha[district] - beta * all_pairs_distances[locker][district]) for district in all_pairs_distances.keys() for locker in nodes_with_locker_locations}
+    #         game_solver(pickle_path, location_actions, population_per_node, utilities, locker_cost, number_of_lockers_per_player, max_iterations, find_one_or_return_all, current_folder, pictures_filename, analysis_filename)
+
+    with tqdm_joblib(tqdm(desc="Progress", total=len(alpha_means)*len(betas))) as progress_bar:
+        results_of_game_simulations = Parallel(n_jobs=-3, verbose=0)(delayed(game_initializer_and_solver)(graph, location_actions, all_pairs_distances, population_per_node, alpha_mean, alpha_std, beta, locker_cost, number_of_lockers_per_player, max_iterations, find_one_or_return_all, current_folder, pictures_folder, analysis_folder) for beta in betas for alpha_mean in alpha_means)
+###     Initialize the location decisions of the players
+#     if os.path.exists(pickle_path) and find_one_or_return_all == "all":
+#         print("Loading NEs from pickle")
+#         with open(pickle_path, "rb") as pickle_file:
+#             equilibria_actions_and_payoffs, number_of_lockers_per_player = joblib.load(pickle_file)
+#         computation_time = 0.0
+#     else:
+#         experiment_start_time = current_time()
+#         equilibria_actions_and_payoffs = find_equilibria_by_RSOC_for_all_initial_combinations(location_actions, population_per_node, utilities, max_iterations, find_one_or_return_all)
+#         computation_time = round((current_time() - experiment_start_time)/60.0, 2)
+#         with open(pickle_path, "wb") as pickle_file:
+#             joblib.dump((equilibria_actions_and_payoffs, number_of_lockers_per_player), pickle_file, compress=3)
+#     SO_action, SO_payoff = find_social_optimum_by_RSOC(population_per_node, utilities, locker_cost, number_of_lockers_per_player)
+#     info1_str += f"Social optimum: {SO_action} with payoff {SO_payoff}\n"
+#     if find_one_or_return_all == 'one':
+#         price_of_anarchy = SO_payoff / sum(payoff_per_location_decision(equilibria_actions_and_payoffs[0][0][player], equilibria_actions_and_payoffs[0][0], player, population_per_node, utilities) for player in [0,1])
+#         print(f"Price of Anarchy: {price_of_anarchy}")
+#     elif find_one_or_return_all == 'all':  
+#         smallest_overall_payoff_equilibrium, largest_payoff_equilibrium = min(sum(x[1]) for x in equilibria_actions_and_payoffs), max(sum(x[1]) for x in equilibria_actions_and_payoffs)
+#         price_of_anarchy = SO_payoff / smallest_overall_payoff_equilibrium
+#         price_of_stability = SO_payoff / largest_payoff_equilibrium
+#         info_str = info1_str + f"""
+# {len(SO_action)} different equilibria have been found
+# Computational time: {computation_time} minutes
+# Price of Anarchy: {price_of_anarchy}
+# Price of Stability: {price_of_stability}"""
+#         for idx, (equilibrium, payoff) in enumerate(equilibria_actions_and_payoffs):
+#             info_str += f"\nEquilibrium {idx}: {equilibrium} with payoff {payoff}"
+#             info_str += f"\nCoincident lockers: {len(set(equilibrium[0]).intersection(set(equilibrium[1])))}"
+#             info_str += f"\nDistances between lockers: {[all_pairs_distances[locker1][locker2] for locker1, locker2 in combinations(equilibrium[0]+equilibrium[1], 2)]}\n"
+#         print(info_str)
+#         with open(current_folder+"/NEs_analysis2.txt", "w") as text_file:
+#             text_file.write(info_str)
+#     else:
+#         print("Find one or return all not recognized")
+
+#     analysis_state = equilibria_actions_and_payoffs.pop()[0]
+
+#     plot_simulation_state(graph, analysis_state, filename=current_folder + "/NEs_analysis.pdf")
