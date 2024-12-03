@@ -65,23 +65,22 @@ def payoff_per_location_decision(location_decision, current_location_actions, pl
     else:
         current_actions = current_location_actions.copy()
     current_actions[player] = location_decision
-    current_lockers = [locker for lockers in current_actions for locker in lockers]#list(chain(*current_actions.values()))
-    districts = {district for _, district in utilities.keys()}
+    if isinstance(current_actions, tuple) or isinstance(current_actions, list):
+        current_lockers = list(chain(*current_actions))
+    if isinstance(current_actions, dict):
+        current_lockers = [locker for _, lockers in current_actions.items() for locker in lockers]
+    districts = population_per_node.keys()
     # Calculate the payoff of the player
-    payoff = 0.0
-    for locker in location_decision:
-        for district in districts:
-            # print("Payoff update")
-            payoff += population_per_node[district] * utilities[district, locker] / (1 + sum(utilities[district, locker] for locker in current_lockers))
+    payoff = sum(population_per_node[district] * utilities[district, locker] / (1 + sum(utilities[district, locker] for locker in current_lockers)) for district in districts for locker in location_decision)
     return payoff
 
 def best_location_action(location_actions, current_location_actions, player, population_per_node, utilities):
     payoffs = {location_decision: payoff_per_location_decision(location_decision, current_location_actions, player, population_per_node, utilities) for location_decision in location_actions}
     # print(f"Player {player} payoffs: {payoffs}")
-    best_location = max(payoffs, key=payoffs.get)
-    return best_location, payoffs[best_location]
+    best_location_decision = max(payoffs, key=payoffs.get)
+    return best_location_decision, payoffs[best_location_decision]
 
-def NE_two_players_by_enumeration_check(location_actions, population_per_node, utilities):
+def NE_two_players_by_enumeration_check(location_actions, population_per_node, utilities, find_one_or_return_all):
     """
     This function checks if a Nash Equilibrium exists by enumerating all possible location decisions
     :param location_actions: The possible location actions of the players
@@ -93,6 +92,7 @@ def NE_two_players_by_enumeration_check(location_actions, population_per_node, u
     """
 
     assert len(location_actions.keys()) == 2, "Only two players are allowed for this function"
+    assert find_one_or_return_all in ['one', 'all'], "Find one or return all not recognized"
     symmetric_flag =  location_actions[0] == location_actions[1]
     print(f"Symmetric game: {symmetric_flag}")
     NEs_detected = []
@@ -113,15 +113,18 @@ def NE_two_players_by_enumeration_check(location_actions, population_per_node, u
         best_second_player_action_per_first_player_action = find_all_maxima_in_dict({locations_player_2 : bimatrix_payoffs[(locations_player_1, locations_player_2)][0] for locations_player_2 in location_actions[1]})
         for second_player_action in best_second_player_action_per_first_player_action:
             if all(bimatrix_payoffs[(locations_player_1, second_player_action)][1] >= bimatrix_payoffs[(locations_player_1, locations_player_2)][1] for locations_player_2 in location_actions[1]):
-                NEs_detected.append((locations_player_1, second_player_action))
+                if find_one_or_return_all == 'one':
+                    return [(locations_player_1, second_player_action)]
+                else:
+                    NEs_detected.append((locations_player_1, second_player_action))
     return NEs_detected
 
-def find_equilibria_by_enumeration_for_two_players(location_actions, all_pairs_distances, population_per_node, alpha, beta):
+def find_equilibria_by_enumeration_for_two_players(location_actions, all_pairs_distances, population_per_node, utilities):
     ### Check if a Nash Equilibrium exists by enumeration
     number_of_players = len(location_actions.keys())
     if number_of_players == 2:
         print("Checking for Nash Equilibrium for two players")
-        NEs_two_players = NE_two_players_by_enumeration_check(location_actions, all_pairs_distances, population_per_node, alpha, beta)
+        NEs_two_players = NE_two_players_by_enumeration_check(location_actions, all_pairs_distances, population_per_node, utilities)
         if NEs_two_players:
             print(f"Nash Equilibrium detected: {NEs_two_players}")
         else:
@@ -195,7 +198,7 @@ def solve_game_by_RSOC(other_player_locations, population_per_node, utilities, l
 def game_simulation_with_initial_actions_given(playing_style, solution_method, number_of_lockers_per_player, population_per_node, utilities, initial_location_actions, max_iterations, printing=False):
     
     new_location_player_dict, new_payoff_player_dict = [None, None], [None,None]
-    current_location_actions = initial_location_actions.copy()
+    current_location_actions = list(initial_location_actions).copy()
     current_payoffs = [payoff_per_location_decision(current_location_actions[0], current_location_actions, 0, population_per_node, utilities), payoff_per_location_decision(current_location_actions[1], current_location_actions, 1, population_per_node, utilities)]
     history_location_actions = []
     player_for_sequential = 0
@@ -224,10 +227,10 @@ def game_simulation_with_initial_actions_given(playing_style, solution_method, n
             new_location_player_dict, new_payoff_player_dict = [None, None], [0,0]
         elif playing_style == 'sequential':
             if solution_method == 'enumeration':
-                new_location_player, new_payoff_player = best_location_action(location_actions[player_for_sequential], current_location_actions, player_for_sequential, all_pairs_distances, population_per_node, alpha, beta)
-                if new_payoff_player > current_payoffs[player_for_sequential]:
-                    current_location_actions[player_for_sequential] = new_location_player
-                    current_payoffs[player_for_sequential] = new_payoff_player
+                new_location_player, new_payoff_player = best_location_action(location_actions[player_for_sequential], current_location_actions, player_for_sequential, population_per_node, utilities)
+                # if new_payoff_player > current_payoffs[player_for_sequential]:
+                current_location_actions[player_for_sequential] = new_location_player
+                current_payoffs[player_for_sequential] = new_payoff_player
             elif solution_method == 'RSOC':
                 current_location_actions[player_for_sequential], current_payoffs[player_for_sequential] = solve_game_by_RSOC(current_location_actions[1-player_for_sequential], population_per_node, utilities, locker_cost, number_of_lockers_per_player[player_for_sequential])
             else:
@@ -278,15 +281,15 @@ def find_equilibria_by_RSOC_for_all_initial_combinations(location_actions, popul
 
     if find_one_or_return_all == 'all':
         results_of_game_simulations = []
-        n_jobs = 1
+        n_jobs = -3
         if n_jobs == 1:
             results_of_game_simulations = Parallel(n_jobs=1, verbose=0)(delayed(game_simulation_with_initial_actions_given)('sequential', 'RSOC', number_of_lockers_per_player, population_per_node, utilities, [initial_action_player_0, initial_action_player_1], max_iterations) for initial_action_player_0 in location_actions[0] for initial_action_player_1 in location_actions[1])
         if n_jobs != 1:
             with tqdm_joblib(tqdm(desc="Progress", total=number_of_initial_combinations)) as progress_bar:
-                results_of_game_simulations = Parallel(n_jobs=1, verbose=0)(delayed(game_simulation_with_initial_actions_given)('sequential', 'RSOC', number_of_lockers_per_player, population_per_node, utilities, [initial_action_player_0, initial_action_player_1], max_iterations) for initial_action_player_0 in location_actions[0] for initial_action_player_1 in location_actions[1])
+                results_of_game_simulations = Parallel(n_jobs=n_jobs, verbose=0)(delayed(game_simulation_with_initial_actions_given)('sequential', 'RSOC', number_of_lockers_per_player, population_per_node, utilities, [initial_action_player_0, initial_action_player_1], max_iterations) for initial_action_player_0 in location_actions[0] for initial_action_player_1 in location_actions[1])
         assert check_couples_first_coincide_and_second_too(results_of_game_simulations), "First coincide and second not"
         return {tuple(result[:2]) for result in results_of_game_simulations if result[2] == "CONVERGED"}
-    elif find_one_or_return_all == 'one':    
+    if find_one_or_return_all == 'one':    
         for initial_action_player_0 in location_actions[0]:
             for initial_action_player_1 in location_actions[1]:
                 print(f"\nCombination {iterations_counter}/{number_of_initial_combinations}")
@@ -356,7 +359,7 @@ def find_social_optimum_by_RSOC(population_per_node, utilities, locker_cost, bud
     return tuple([[ll for ll in locker_nodes if x[ll].X > 1.0 - 1e-5], [ll for ll in locker_nodes if y[ll].X > 1.0 - 1e-5]]), social_payoff  
 
 
-def plot_simulation_state(graph, current_actions, filename=None, show=True):
+def plot_simulation_state(graph, current_actions, utilities, filename=None, show=True):
     
     colors = ['red', 'blue', 'magenta', 'orange', 'olive',  'cyan', 
                 'purple', 'brown', 'pink', 'green', 'lime', 'navy',
@@ -443,7 +446,7 @@ def plot_simulation_state(graph, current_actions, filename=None, show=True):
     if show:
         plt.show()
 
-def game_solver(graph, pickle_path, location_actions, population_per_node, utilities, locker_cost, number_of_lockers_per_player, max_iterations, find_one_or_return_all, current_folder, pictures_filename, analysis_filename):
+def game_solver(graph, pickle_path, location_actions, population_per_node, utilities, locker_cost, number_of_lockers_per_player, max_iterations, find_one_or_return_all, solution_method, pictures_filename, analysis_filename):
     
     info1_str = f"""
 Maximal distance between locker and district: {max(all_pairs_distances[locker][district] for locker in nodes_with_locker_locations for district in all_pairs_distances.keys())} 
@@ -460,7 +463,25 @@ Some utilities: {random.sample(list(utilities.items()), 5)}
         computation_time = 0.0
     else:
         experiment_start_time = current_time()
-        equilibria_actions_and_payoffs = find_equilibria_by_RSOC_for_all_initial_combinations(location_actions, population_per_node, utilities, max_iterations, find_one_or_return_all)
+        if solution_method == 'RSOC':
+            equilibria_actions_and_payoffs = find_equilibria_by_RSOC_for_all_initial_combinations(location_actions, population_per_node, utilities, max_iterations, find_one_or_return_all)
+        if solution_method == 'enumeration':
+            if find_one_or_return_all == 'all':
+                with tqdm_joblib(tqdm(desc="Progress", total=len(location_actions[0])*len(location_actions[1]))) as progress_bar:
+                    enumeration_outcomes = Parallel(n_jobs=-3, verbose=0)(delayed(game_simulation_with_initial_actions_given)("sequential", "enumeration", number_of_lockers_per_player, population_per_node, utilities, (initial_location_player_1, initial_location_player_2), max_iterations, printing=False) for initial_location_player_1 in location_actions[0] for initial_location_player_2 in location_actions[1])
+                    assert check_couples_first_coincide_and_second_too(enumeration_outcomes), "First coincide and second not"
+                    equilibria_actions_and_payoffs = list({outcome[:2] for outcome in enumeration_outcomes if outcome[2] == "CONVERGED"})
+            elif find_one_or_return_all == 'one':
+                found = False
+                for initial_location_player_1 in location_actions[0]:
+                    if found:
+                        break
+                    for initial_location_player_2 in location_actions[1]:
+                        actions, payoffs, convergence = game_simulation_with_initial_actions_given("sequential", "enumeration", number_of_lockers_per_player, population_per_node, utilities, (initial_location_player_1, initial_location_player_2), max_iterations, printing=False)
+                        if convergence == "CONVERGED":
+                            equilibria_actions_and_payoffs = [(actions, payoffs)]
+                            found = True
+                            break
         computation_time = round((current_time() - experiment_start_time)/60.0, 2)
         with open(pickle_path, "wb") as pickle_file:
             joblib.dump((equilibria_actions_and_payoffs, number_of_lockers_per_player), pickle_file, compress=3)
@@ -471,8 +492,8 @@ Some utilities: {random.sample(list(utilities.items()), 5)}
         print(f"Price of Anarchy: {price_of_anarchy}")
     elif find_one_or_return_all == 'all':  
         smallest_overall_payoff_equilibrium, largest_payoff_equilibrium = min(sum(x[1]) for x in equilibria_actions_and_payoffs), max(sum(x[1]) for x in equilibria_actions_and_payoffs)
-        price_of_anarchy = SO_payoff / smallest_overall_payoff_equilibrium
-        price_of_stability = SO_payoff / largest_payoff_equilibrium
+        price_of_anarchy = "DIV_BY_0" if smallest_overall_payoff_equilibrium == 0.0 else SO_payoff / smallest_overall_payoff_equilibrium
+        price_of_stability = "DIV_BY_0" if largest_payoff_equilibrium == 0.0 else SO_payoff / largest_payoff_equilibrium
         info_str = info1_str + f"""
 {len(SO_action)} different equilibria have been found
 Computational time: {computation_time} minutes
@@ -491,15 +512,15 @@ Price of Stability: {price_of_stability}"""
     
     analysis_state = equilibria_actions_and_payoffs.pop()[0]
 
-    plot_simulation_state(graph, analysis_state, filename=pictures_filename, show=False)
+    plot_simulation_state(graph, analysis_state, utilities, filename=pictures_filename, show=False)
 
-def game_initializer_and_solver(graph, location_actions, all_pairs_distances, population_per_node, alpha_mean, alpha_std, beta, locker_cost, number_of_lockers_per_player, max_iterations, find_one_or_return_all, current_folder, pictures_folder, analysis_folder):
+def game_initializer_and_solver(graph, location_actions, all_pairs_distances, population_per_node, alpha_mean, alpha_std, beta, locker_cost, number_of_lockers_per_player, max_iterations, find_one_or_return_all, solution_method, pictures_folder, analysis_folder):
     alpha = {district : np.random.normal(loc = alpha_mean, scale = alpha_std) for district in graph.nodes} #{district : 3 for district in graph.nodes}
-    pictures_filename = pictures_folder + f"/NEs_analysis_beta_{beta}_alpha_mean_{alpha_mean}.pdf"
-    analysis_filename = analysis_folder + f"/NEs_analysis_beta_{beta}_alpha_mean_{alpha_mean}.txt"
-    pickle_path = analysis_folder + f"/NEs_pickle_{number_of_lockers_per_player[0]}_{number_of_lockers_per_player[1]}_beta_{beta}_alpha_mean_{alpha_mean}.pkl"
+    pictures_filename = pictures_folder + f"/NEs_analysis_{solution_method}_beta_{beta}_alpha_mean_{alpha_mean}.pdf"
+    analysis_filename = analysis_folder + f"/NEs_analysis_{solution_method}_beta_{beta}_alpha_mean_{alpha_mean}.txt"
+    pickle_path = analysis_folder + f"/NEs_pickle_{solution_method}_{number_of_lockers_per_player[0]}_{number_of_lockers_per_player[1]}_beta_{beta}_alpha_mean_{alpha_mean}.pkl"
     utilities = {(district, locker): np.exp(alpha[district] - beta * all_pairs_distances[locker][district]) for district in all_pairs_distances.keys() for locker in nodes_with_locker_locations}
-    game_solver(graph, pickle_path, location_actions, population_per_node, utilities, locker_cost, number_of_lockers_per_player, max_iterations, find_one_or_return_all, current_folder, pictures_filename, analysis_filename)
+    game_solver(graph, pickle_path, location_actions, population_per_node, utilities, locker_cost, number_of_lockers_per_player, max_iterations, find_one_or_return_all, solution_method, pictures_filename, analysis_filename)
 
 if __name__ == """__main__""":
 
@@ -508,7 +529,16 @@ if __name__ == """__main__""":
     current_folder = os.path.dirname(current_file_path)
     graph_path = os.path.dirname(current_folder) + "/RealGraphCreation/eindhoven_with_districts_Binnenstad_Witte Dame_Bergen.graphml"
     playing_style = 'sequential' # 'simultaneous' or 'sequential'
-    solution_method = 'RSOC' # 'enumeration' or 'RSOC'
+    solution_method = 'enumeration' # 'enumeration' or 'RSOC'
+
+    ### Define the parameters of the players: Players are 0, 1, ..., n_players-1
+    number_of_lockers_per_player = [2,1]#{player: 2 for player in range(number_of_players)}
+    max_iterations = 100
+    find_one_or_return_all = 'one'
+    number_of_players = len(number_of_lockers_per_player)
+    alpha_means = [-1.0, 0.0]#[-100, -1.0, 0.0, 1.0]
+    alpha_std = 1.0
+    betas = [3e-5, 5e-5]
 
     today = datetime.today().strftime('%Y%m%d')
     pictures_folder = current_folder + f"/Pictures_Experiment_{today}"
@@ -549,18 +579,9 @@ if __name__ == """__main__""":
     nodes_with_locker_locations = [node for node, data in graph.nodes(data=True) if data.get('locker_possible') == 'locker']
     population_per_node = {node: round(float(data.get('node_population'))) for node, data in graph.nodes(data=True)}
 
-    ### Define the parameters of the players: Players are 0, 1, ..., n_players-1
-    number_of_lockers_per_player = [1,1]#{player: 2 for player in range(number_of_players)}
-    max_iterations = 100
-    find_one_or_return_all = 'all'
-    number_of_players = len(number_of_lockers_per_player)
-    alpha_means = [-100, -1.0, 0.0, 1.0]
-    alpha_std = 1.0
-    betas = [3e-5, 5e-5]
     # utilities = {(district, locker): np.exp(alpha[district] - beta * all_pairs_distances[locker][district]) for district in all_pairs_distances.keys() for locker in nodes_with_locker_locations}
 
-    if solution_method == 'RSOC':
-        locker_cost = {node: 1 for node in nodes_with_locker_locations}
+    locker_cost = {node: 1 for node in nodes_with_locker_locations}
 
     ### Enumerate the actions
     location_actions = {player : list(combinations(nodes_with_locker_locations, number_of_lockers_per_player[player])) for player in range(number_of_players)}
@@ -577,44 +598,5 @@ if __name__ == """__main__""":
     #         utilities = {(district, locker): np.exp(alpha[district] - beta * all_pairs_distances[locker][district]) for district in all_pairs_distances.keys() for locker in nodes_with_locker_locations}
     #         game_solver(pickle_path, location_actions, population_per_node, utilities, locker_cost, number_of_lockers_per_player, max_iterations, find_one_or_return_all, current_folder, pictures_filename, analysis_filename)
 
-    with tqdm_joblib(tqdm(desc="Progress", total=len(alpha_means)*len(betas))) as progress_bar:
-        results_of_game_simulations = Parallel(n_jobs=-3, verbose=0)(delayed(game_initializer_and_solver)(graph, location_actions, all_pairs_distances, population_per_node, alpha_mean, alpha_std, beta, locker_cost, number_of_lockers_per_player, max_iterations, find_one_or_return_all, current_folder, pictures_folder, analysis_folder) for beta in betas for alpha_mean in alpha_means)
-###     Initialize the location decisions of the players
-#     if os.path.exists(pickle_path) and find_one_or_return_all == "all":
-#         print("Loading NEs from pickle")
-#         with open(pickle_path, "rb") as pickle_file:
-#             equilibria_actions_and_payoffs, number_of_lockers_per_player = joblib.load(pickle_file)
-#         computation_time = 0.0
-#     else:
-#         experiment_start_time = current_time()
-#         equilibria_actions_and_payoffs = find_equilibria_by_RSOC_for_all_initial_combinations(location_actions, population_per_node, utilities, max_iterations, find_one_or_return_all)
-#         computation_time = round((current_time() - experiment_start_time)/60.0, 2)
-#         with open(pickle_path, "wb") as pickle_file:
-#             joblib.dump((equilibria_actions_and_payoffs, number_of_lockers_per_player), pickle_file, compress=3)
-#     SO_action, SO_payoff = find_social_optimum_by_RSOC(population_per_node, utilities, locker_cost, number_of_lockers_per_player)
-#     info1_str += f"Social optimum: {SO_action} with payoff {SO_payoff}\n"
-#     if find_one_or_return_all == 'one':
-#         price_of_anarchy = SO_payoff / sum(payoff_per_location_decision(equilibria_actions_and_payoffs[0][0][player], equilibria_actions_and_payoffs[0][0], player, population_per_node, utilities) for player in [0,1])
-#         print(f"Price of Anarchy: {price_of_anarchy}")
-#     elif find_one_or_return_all == 'all':  
-#         smallest_overall_payoff_equilibrium, largest_payoff_equilibrium = min(sum(x[1]) for x in equilibria_actions_and_payoffs), max(sum(x[1]) for x in equilibria_actions_and_payoffs)
-#         price_of_anarchy = SO_payoff / smallest_overall_payoff_equilibrium
-#         price_of_stability = SO_payoff / largest_payoff_equilibrium
-#         info_str = info1_str + f"""
-# {len(SO_action)} different equilibria have been found
-# Computational time: {computation_time} minutes
-# Price of Anarchy: {price_of_anarchy}
-# Price of Stability: {price_of_stability}"""
-#         for idx, (equilibrium, payoff) in enumerate(equilibria_actions_and_payoffs):
-#             info_str += f"\nEquilibrium {idx}: {equilibrium} with payoff {payoff}"
-#             info_str += f"\nCoincident lockers: {len(set(equilibrium[0]).intersection(set(equilibrium[1])))}"
-#             info_str += f"\nDistances between lockers: {[all_pairs_distances[locker1][locker2] for locker1, locker2 in combinations(equilibrium[0]+equilibrium[1], 2)]}\n"
-#         print(info_str)
-#         with open(current_folder+"/NEs_analysis2.txt", "w") as text_file:
-#             text_file.write(info_str)
-#     else:
-#         print("Find one or return all not recognized")
-
-#     analysis_state = equilibria_actions_and_payoffs.pop()[0]
-
-#     plot_simulation_state(graph, analysis_state, filename=current_folder + "/NEs_analysis.pdf")
+    # with tqdm_joblib(tqdm(desc="Progress", total=len(alpha_means)*len(betas))) as progress_bar:
+    results_of_game_simulations = Parallel(n_jobs=1, verbose=0)(delayed(game_initializer_and_solver)(graph, location_actions, all_pairs_distances, population_per_node, alpha_mean, alpha_std, beta, locker_cost, number_of_lockers_per_player, max_iterations, find_one_or_return_all, solution_method, pictures_folder, analysis_folder) for beta in betas for alpha_mean in alpha_means)
