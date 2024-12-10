@@ -1,20 +1,57 @@
 import networkx as nx
 import osmnx as ox
+import sys
 import os
 from itertools import combinations, chain
 import random
 import numpy as np
 from time import time as current_time
 import gurobipy as grb
+from gurobipy import GRB
 from joblib import Parallel, delayed
 import joblib
 from contextlib import contextmanager
 from tqdm import tqdm
 from datetime import datetime
 from math import isclose
+import logging
 
 random.seed(27)
 np.random.seed(27)
+    
+
+def nogood_callback(model, where):
+    # if where == GRB.Callback.MIPNODE and model.cbGet(GRB.Callback.MIPNODE_STATUS) == GRB.OPTIMAL:
+    #     x_val = model.cbGetNodeRel(model._x)
+    #     y_val = model.cbGetNodeRel(model._y)
+    if where == GRB.Callback.MIPSOL:
+        x_val = model.cbGetSolution(model._x)
+        y_val = model.cbGetSolution(model._y)
+
+        x_lockers = tuple([ll for ll in model._locker_nodes if x_val[ll] > 0.5])
+        y_lockers = tuple([ll for ll in model._locker_nodes if y_val[ll] > 0.5])
+
+        # print(f"X values: {x_lockers} - Y values: {y_lockers}")
+    
+        _, x_iter_payoff = solve_game_by_RSOC(y_lockers, model._population_per_node, model._utilities, model._locker_cost, model._budgets[0])
+        _, y_iter_payoff = solve_game_by_RSOC(x_lockers, model._population_per_node, model._utilities, model._locker_cost, model._budgets[1])
+
+        x_social_payoff = payoff_per_location_decision(x_lockers, [y_lockers], model._population_per_node, model._utilities)
+        y_social_payoff = payoff_per_location_decision(y_lockers, [x_lockers], model._population_per_node, model._utilities)
+
+        if x_iter_payoff > x_social_payoff + 1e-4 or y_iter_payoff > y_social_payoff + 1e-4:
+            # if not isclose(social_payoff, x_iter_payoff + y_iter_payoff, rel_tol=1e-2):
+            # print(f"x best payoff: {round(x_iter_payoff,1)}, x social payoff: {round(x_social_payoff,1)}, y best payoff: {round(y_iter_payoff,1)}, y social payoff: {round(y_social_payoff,1)}")
+            # print(f"Social payoff: {round(x_social_payoff + y_social_payoff,1)}, Sum of payoffs: {round(x_iter_payoff + y_iter_payoff,1)}")
+            model.cbLazy(grb.quicksum(1 - model._x[ll] for ll in x_lockers) + grb.quicksum(model._x[ll] for ll in model._locker_nodes if ll not in x_lockers) + grb.quicksum(1 - model._y[ll] for ll in y_lockers) + grb.quicksum(model._y[ll] for ll in model._locker_nodes if ll not in y_lockers) >= 1)
+            
+def find_first_float_after_substring(s, substring):
+    import re
+    pattern = re.escape(substring) + r'\s*([-+]?\d*\.\d+|\d+)'
+    match = re.search(pattern, s)
+    if match:
+        return float(match.group(1))
+    return None
 
 @contextmanager
 def tqdm_joblib(tqdm_object):
@@ -362,84 +399,99 @@ def find_best_equilibrium_and_stability_by_RSOC(population_per_node, utilities, 
     equilibrium_found = False
     max_iteration = 100
     iteration = 0
-    forbidden_actions = []
 
-    while not equilibrium_found and iteration < max_iteration:
-        model = grb.Model()
+    with grb.Env() as env, grb.Model(env=env) as model:
+
+        model.setParam('MIPGap', 0)
+        model.setParam('LazyConstraints', 0)
         model.setParam('OutputFlag', 0)  # Set silent mode
-
+    
         # Variables
-        x = model.addVars(locker_nodes, vtype=grb.GRB.BINARY, name="x")
-        y = model.addVars(locker_nodes, vtype=grb.GRB.BINARY, name="y")
-        t = model.addVars(districts, lb=-np.inf, ub=0, name="t")
-        z = model.addVars(districts, lb=0, name="z")
+        model._x = model.addVars(locker_nodes, vtype=grb.GRB.BINARY, name="x")
+        model._y = model.addVars(locker_nodes, vtype=grb.GRB.BINARY, name="y")
+        model._t = model.addVars(districts, lb=-np.inf, ub=0, name="t")
+        model._z = model.addVars(districts, lb=0, name="z")
+        # model._forbidden_actions = []
+        model._locker_nodes = locker_nodes
+        model._locker_cost = locker_cost
+        model._population_per_node = population_per_node
+        model._utilities = utilities
+        model._budgets = budgets
+
+        model.setObjective(grb.quicksum(model._population_per_node[dd] * (1 + model._t[dd]) for dd in districts), grb.GRB.MAXIMIZE)
 
         # Constraints
-        model.addConstr(grb.quicksum(cost_ll * x[ll] for ll, cost_ll in locker_cost.items()) <= budgets[0], "budget1")
-        model.addConstr(grb.quicksum(cost_ll * y[ll] for ll, cost_ll in locker_cost.items()) <= budgets[1], "budget2")
-
+        model.addConstr(grb.quicksum(cost_ll * model._x[ll] for ll, cost_ll in model._locker_cost.items()) <= model._budgets[0], "budget1")
+        model.addConstr(grb.quicksum(cost_ll * model._y[ll] for ll, cost_ll in model._locker_cost.items()) <= model._budgets[1], "budget2")
+        
         for dd in districts:
-            model.addConstr(z[dd] == 1 + 
-                            grb.quicksum(utilities[dd, ll] * x[ll] for ll in locker_nodes) + 
-                            grb.quicksum(utilities[dd, ll] * y[ll] for ll in locker_nodes), f"z_{dd}")
-            model.addConstr( - z[dd] * t[dd] >= 1, f"rsoc_{dd}") 
+            model.addConstr(model._z[dd] == 1 + 
+                            grb.quicksum(model._utilities[dd, ll] * model._x[ll] for ll in model._locker_nodes) + 
+                            grb.quicksum(model._utilities[dd, ll] * model._y[ll] for ll in model._locker_nodes), f"z_{dd}")
+            model.addConstr( - model._z[dd] * model._t[dd] >= 1, f"rsoc_{dd}") 
 
-        for no_good_cut in forbidden_actions:
-            model.addConstr(grb.quicksum(x[ll] for ll in locker_nodes if ll not in no_good_cut[0]) + 
-                            grb.quicksum(1-x[ll] for ll in no_good_cut[0]) + 
-                            grb.quicksum(y[ll] for ll in locker_nodes if ll not in no_good_cut[1]) + 
-                            grb.quicksum(1-y[ll] for ll in no_good_cut[1]) >= 1, 
-                            f"forbidden_{no_good_cut}")
+        
+        # model.optimize(nogood_callback)
+    
+        # status = model.Status
+        # if status == grb.GRB.Status.OPTIMAL:
+        #     pass
+        # elif status == grb.GRB.Status.INFEASIBLE:
+        #     print("Model is infeasible")
+        # elif status == grb.GRB.Status.UNBOUNDED:
+        #     print("Model is unbounded")
+        # else:
+        #     print(f"Optimization ended with status {status}")
 
-        ### ADD CONSTRAINT ON FORBIDDING THE PREVIOUS SOCIAL OPTIMUM TO BE APPLIED X_J    
+        # # social_payoff = 0.0
+        # x_lockers = [ll for ll in locker_nodes if model._x[ll].X > 0.5]
+        # y_lockers = [ll for ll in locker_nodes if model._y[ll].X > 0.5]
 
-        # Objective
-        model.setObjective(grb.quicksum(population_per_node[dd] * (1 + t[dd]) for dd in districts), grb.GRB.MAXIMIZE)
-        model.setParam('MIPGap', 0)
+        # social_payoff = model.objVal
 
-        # Optimize
-        model.optimize()
+        # _, x_iter_payoff = solve_game_by_RSOC(y_lockers, population_per_node, utilities, locker_cost, budgets[0])
+        # _, y_iter_payoff = solve_game_by_RSOC(x_lockers, population_per_node, utilities, locker_cost, budgets[1])
 
-        # Check the optimization status
-        status = model.Status
-        if status == grb.GRB.Status.OPTIMAL:
-            pass
-        elif status == grb.GRB.Status.INFEASIBLE:
-            print("Model is infeasible")
-        elif status == grb.GRB.Status.UNBOUNDED:
-            print("Model is unbounded")
-        else:
-            print(f"Optimization ended with status {status}")
+        # print(f"Social payoff: {social_payoff}, Sum of payoffs: {x_iter_payoff+y_iter_payoff}, x payoff: {x_iter_payoff}, y payoff: {y_iter_payoff}")
+        # return (x_lockers, y_lockers), (x_iter_payoff, y_iter_payoff)
 
-        # social_payoff = 0.0
-        x_lockers = [ll for ll in locker_nodes if isclose(x[ll].X, 1.0)]
-        y_lockers = [ll for ll in locker_nodes if isclose(y[ll].X, 1.0)]
-        # all_lockers = x_lockers + y_lockers
-        # for locker in all_lockers:
-        #     for district in districts:
-        #         social_payoff += population_per_node[district] * utilities[district, locker] / (1 + sum(utilities[district, locker] for locker in all_lockers))
-        # social_payoff = sum(population_per_node[district] * sum(utilities[district, locker_1] for locker_1 in all_lockers) / (1 + sum(utilities[district, locker_2] for locker_2 in all_lockers)) for district in districts)
-        social_payoff = model.objVal
+        forbidden_actions = []	
+        while not equilibrium_found and iteration < max_iteration:
 
-        _, x_iter_payoff = solve_game_by_RSOC(y_lockers, population_per_node, utilities, locker_cost, budgets[0])
-        _, y_iter_payoff = solve_game_by_RSOC(x_lockers, population_per_node, utilities, locker_cost, budgets[1])
+            if len(forbidden_actions) > 0:
+                model.addConstr(grb.quicksum(model._x[ll] for ll in locker_nodes if ll not in forbidden_actions[-1][0]) + 
+                                grb.quicksum(1-model._x[ll] for ll in forbidden_actions[-1][0]) + 
+                                grb.quicksum(model._y[ll] for ll in locker_nodes if ll not in forbidden_actions[-1][1]) + 
+                                grb.quicksum(1-model._y[ll] for ll in forbidden_actions[-1][1]) >= 1, 
+                                f"forbidden_{forbidden_actions[-1]}")
+            
+            model.optimize()
+            social_payoff = model.objVal
+            x_lockers = [ll for ll in locker_nodes if model._x[ll].X > 0.5]
+            y_lockers = [ll for ll in locker_nodes if model._y[ll].X > 0.5]
 
-        if iteration % 1 == 0:
-            print(f"Iteration {iteration} - Social payoff: {social_payoff}, x payoff: {x_iter_payoff}, y payoff: {y_iter_payoff}")
-            print(f"X lockers: {x_lockers}, Y lockers: {y_lockers}")
-        if isclose(social_payoff, x_iter_payoff + y_iter_payoff):
-            # if social_payoff < x_iter_payoff + y_iter_payoff:
-            print(f"Best equilibrium found in iteration {iteration}")
-            equilibrium_found = True
-            return (x_lockers, y_lockers), (x_iter_payoff, y_iter_payoff)
-        else:
-            forbidden_actions.append([x_lockers, y_lockers])
-            iteration += 1
+            _, x_iter_payoff = solve_game_by_RSOC(y_lockers, population_per_node, utilities, locker_cost, budgets[0])
+            _, y_iter_payoff = solve_game_by_RSOC(x_lockers, population_per_node, utilities, locker_cost, budgets[1])
 
-    print("No best equilibrium found")
-    return (x_lockers, y_lockers), (x_iter_payoff, y_iter_payoff)
+            x_social_payoff = payoff_per_location_decision(x_lockers, [y_lockers], model._population_per_node, model._utilities)
+            y_social_payoff = payoff_per_location_decision(y_lockers, [x_lockers], model._population_per_node, model._utilities)
 
-def plot_simulation_state(graph, current_actions, utilities, filename=None, gpd_shapes=True, show=True):
+            if iteration % 1 == 0:
+                print(f"Iteration {iteration} - Social payoff: {social_payoff}, Sum of payoffs: {x_iter_payoff+y_iter_payoff}, x payoff: {x_iter_payoff}, y payoff: {y_iter_payoff}")
+                print(f"X lockers: {x_lockers}, Y lockers: {y_lockers}")
+            if x_social_payoff > x_iter_payoff - 1e-4 and y_social_payoff > y_iter_payoff - 1e-4:
+                print("Best equilibrium found")
+                # print(f"Social payoff: {social_payoff}, Sum of payoffs: {x_iter_payoff+y_iter_payoff}, x payoff: {x_iter_payoff}, y payoff: {y_iter_payoff}")
+                equilibrium_found = True
+                return (x_lockers, y_lockers), (x_iter_payoff, y_iter_payoff)
+            else:
+                print(f"Adding forbidden action: {x_lockers, y_lockers}")
+                forbidden_actions.append([x_lockers, y_lockers])
+                iteration += 1
+
+        return (x_lockers, y_lockers), (x_iter_payoff, y_iter_payoff)
+
+def plot_simulation_state(graph, current_actions, utilities, population_per_node, filename=None, gpd_shapes=True, show=True):
     
     import matplotlib.pyplot as plt
     from matplotlib.patches import Rectangle, Polygon
@@ -451,7 +503,8 @@ def plot_simulation_state(graph, current_actions, utilities, filename=None, gpd_
     located_lockers = list(chain(*current_actions))
 
     probability_district_served_by_a_locker = [sum(utilities[district, locker] for locker in located_lockers) / (1 + sum(utilities[district, locker] for locker in located_lockers)) for district in graph.nodes]
-    populations = [round(float(data.get('node_population'))) * 2 for node, data in graph.nodes(data=True)]
+    # populations = [round(float(data.get('node_population'))) * 2 for node, data in graph.nodes(data=True)]
+    populations = [population_per_node[node] for node in graph.nodes]
 
     colors_per_node_with_players = {node: [colors[player] for player in range(number_of_players) if node in current_actions[player]] for node in graph.nodes() if node in located_lockers}
     
@@ -535,7 +588,7 @@ def plot_simulation_state(graph, current_actions, utilities, filename=None, gpd_
         print()
 
     if filename:
-        plt.savefig(filename)
+        plt.savefig(filename, bbox_inches='tight')
     if show:
         plt.show()
 
@@ -630,34 +683,15 @@ Some utilities: {random.sample(list(utilities.items()), 5)}
     if os.path.exists(pickle_path) and find_one_or_return_all == "all":
         print("Loading NEs from pickle")
         with open(pickle_path, "rb") as pickle_file:
-            equilibria_actions_and_payoffs, number_of_lockers_per_player = joblib.load(pickle_file)
+            equilibria_actions_and_payoffs, number_of_lockers_per_player, utilities, population_per_node = joblib.load(pickle_file)
         computation_time = 0.0
     else:
         experiment_start_time = current_time()
         if solution_method == 'RSOC':
             equilibria_actions_and_payoffs = find_equilibria_by_RSOC_for_all_initial_combinations(location_actions, population_per_node, utilities, max_iterations, find_one_or_return_all)
-        if solution_method == 'enumeration': #DEPRECATED
-            #     ### DEPRECATED: BETTER game_initializer_and_solver_by_enumeration
-            pass
-            #     if find_one_or_return_all == 'all':
-            #         with tqdm_joblib(tqdm(desc="Progress", total=len(location_actions[0])*len(location_actions[1]))) as progress_bar:
-            #             enumeration_outcomes = Parallel(n_jobs=-3, verbose=0)(delayed(game_simulation_with_initial_actions_given)("sequential", "enumeration", number_of_lockers_per_player, population_per_node, utilities, (initial_location_player_1, initial_location_player_2), max_iterations, printing=False) for initial_location_player_1 in location_actions[0] for initial_location_player_2 in location_actions[1])
-            #             assert check_couples_first_coincide_and_second_too(enumeration_outcomes), "First coincide and second not"
-            #             equilibria_actions_and_payoffs = list({outcome[:2] for outcome in enumeration_outcomes if outcome[2] == "CONVERGED"})
-            #     elif find_one_or_return_all == 'one':
-            #         found = False
-            #         for initial_location_player_1 in location_actions[0]:
-            #             if found:
-            #                 break
-            #             for initial_location_player_2 in location_actions[1]:
-            #                 actions, payoffs, convergence = game_simulation_with_initial_actions_given("sequential", "enumeration", number_of_lockers_per_player, population_per_node, utilities, (initial_location_player_1, initial_location_player_2), max_iterations, printing=False)
-            #                 if convergence == "CONVERGED":
-            #                     equilibria_actions_and_payoffs = [(actions, payoffs)]
-            #                     found = True
-            #                     break
         computation_time = round((current_time() - experiment_start_time)/60.0, 2)
         with open(pickle_path, "wb") as pickle_file:
-            joblib.dump((equilibria_actions_and_payoffs, number_of_lockers_per_player), pickle_file, compress=3)
+            joblib.dump((equilibria_actions_and_payoffs, number_of_lockers_per_player, utilities, population_per_node), pickle_file, compress=8)
     SO_action, SO_payoff = find_social_optimum_by_RSOC(population_per_node, utilities, locker_cost, number_of_lockers_per_player)
     info1_str += f"Social optimum: {SO_action} with payoff {SO_payoff}\n"
     if find_one_or_return_all == 'one':
@@ -690,7 +724,7 @@ Price of Stability: {price_of_stability}"""
     else:
         analysis_state = random.choice(list(equilibria_actions_and_payoffs))[0]
 
-    plot_simulation_state(graph, analysis_state, utilities, filename=pictures_filename, gpd_shapes=True , show=False)
+    plot_simulation_state(graph, analysis_state, utilities, population_per_node, filename=pictures_filename, gpd_shapes=True , show=False)
 
 def game_solver_by_enumeration(graph, location_actions, all_pairs_distances, population_per_node, utilities, number_of_lockers_per_player, find_one_or_return_all, pictures_folder, analysis_folder):
     pictures_filename = pictures_folder + f"/NEs_analysis_{solution_method}_beta_{beta}_alpha_mean_{alpha_mean}.pdf"
@@ -708,13 +742,13 @@ Some utilities: {random.sample(list(utilities.items()), 5)}
     if os.path.exists(pickle_path) and find_one_or_return_all == "all":
         print("Loading NEs from pickle")
         with open(pickle_path, "rb") as pickle_file:
-            equilibria_actions_and_payoffs, number_of_lockers_per_player = joblib.load(pickle_file)
+            equilibria_actions_and_payoffs, number_of_lockers_per_player, population_per_node, utilities = joblib.load(pickle_file)
         computation_time
     else:
         equilibria_actions_and_payoffs = find_equilibria_by_enumeration_for_two_players(location_actions, population_per_node, utilities, find_one_or_return_all)
         computation_time = round((current_time() - start_enumeration_time)/60.0, 2)
         with open(pickle_path, "wb") as pickle_file:
-            joblib.dump((equilibria_actions_and_payoffs, number_of_lockers_per_player), pickle_file, compress=3)
+            joblib.dump((equilibria_actions_and_payoffs, number_of_lockers_per_player, population_per_node, utilities), pickle_file, compress=8)
         SO_action, SO_payoff = find_social_optimum_by_RSOC(population_per_node, utilities, locker_cost, number_of_lockers_per_player)
     info1_str += f"Social optimum: {SO_action} with payoff {SO_payoff}\n"
     if find_one_or_return_all == 'one':
@@ -742,7 +776,7 @@ Price of Stability: {price_of_stability}"""
         print("No Nash Equilibrium detected\n")
         return []
     random_equilibrium = random.choice(equilibria_actions_and_payoffs)[0]
-    plot_simulation_state(graph, random_equilibrium, utilities, filename=pictures_filename, show=False)
+    plot_simulation_state(graph, random_equilibrium, utilities, population_per_node, filename=pictures_filename, show=False)
     # return equilibria_actions_and_payoffs
 
 def game_initializer_and_solver(graph, solution_method, location_actions, all_pairs_distances, population_per_node, alpha, beta, locker_cost, number_of_lockers_per_player, max_iterations, find_one_or_return_all, pictures_folder, analysis_folder):
@@ -757,31 +791,47 @@ def game_initializer_and_solver(graph, solution_method, location_actions, all_pa
     else:
         print("Solution method not recognized")
 
-
+def plot_and_info_from_pickle(graph, pickle_path, utilities, population_per_node, pictures_filename):
+    if os.path.exists(pickle_path):
+        results =joblib.load(pickle_path)
+        with open(pickle_path, "rb") as pickle_file:
+            # equilibria_actions_and_payoffs, number_of_lockers_per_player, utilities, population_per_node = joblib.load(pickle_file)
+            results = joblib.load(pickle_file)
+            if len(results) == 4:
+                equilibria_actions_and_payoffs, _, utilities, population_per_node = results
+            if len(results) == 2:
+                equilibria_actions_and_payoffs, _ = results
+        best_equilibrium, _ = max(equilibria_actions_and_payoffs, key=lambda x: sum(x[1]))
+        plot_simulation_state(graph, best_equilibrium, utilities, population_per_node, filename=pictures_filename, gpd_shapes=False , show=False)
+    else:
+        print("Pickle not found")
 
 
 if __name__ == """__main__""":
 
     # Get the directory name of the current file
     current_file_path = os.path.abspath(__file__)
+    if current_file_path == 'c:\\Users\\20214095\\AppData\\Local\\Temp\\Mxt235\\RemoteFiles\\592450_2_0\\Competitive_location_20241206.py':
+        current_file_path = "c:/Users/20214095/OneDrive - TU Eindhoven/Desktop/PhD material/Competitive_Locker_Location/Code/CompetitiveLockerLocation/NetworkCompetitiveLocation_FromEHVGraph_20241105.py"
     current_folder = os.path.dirname(current_file_path)
     graph_path = os.path.dirname(current_folder) + "/CompLLG_data/eindhoven_with_districts_Binnenstad_Witte Dame_Bergen.graphml"
     playing_style = 'sequential' # 'simultaneous' or 'sequential'
     solution_method = 'RSOC' # 'enumeration' or 'RSOC'
-    find_one_or_return_all = 'one' # 'one' or 'all'
+    find_one_or_return_all = 'all' # 'one' or 'all'
 
     ### Define the parameters of the players: Players are 0, 1, ..., n_players-1
     number_of_lockers_per_player = [1,1]#{player: 2 for player in range(number_of_players)}
     max_iterations = 100
     number_of_players = len(number_of_lockers_per_player)
-    alpha_means = [-1.0, 0.0, 1.0]#[-100, -1.0, 0.0, 1.0]
-    alpha_std = 0.0
-    betas = [1e-3, 3e-3, 5e-3, 7e-3, 9e-3]#, 7e-3, 9e-3]
+    alpha_means = [-1.0, 0.0, 1.0]
+    alpha_stds = [1.0]
+    betas = [1e-3, 3e-3, 5e-3, 7e-3, 9e-3]
 
     today = datetime.today().strftime('%Y%m%d')
-    extra_name = "check"
+    extra_name = "randomized_alpha"
     pictures_folder = current_folder + f"/Pictures_Experiment_{extra_name}_{today}"
     analysis_folder = current_folder + f"/Analysis_Experiment_{extra_name}_{today}"
+    folder_to_work = current_folder+"/Analysis_Experiment_FirsttestSnellius_20241206"
 # Check whether the specified path exists or not
     if not os.path.exists(pictures_folder):
         # Create a new directory because it does not exist
@@ -823,10 +873,20 @@ if __name__ == """__main__""":
     ### Enumerate the actions
     location_actions = {player : list(combinations(nodes_with_locker_locations, number_of_lockers_per_player[player])) for player in range(number_of_players)}
 
-    plot_simulation_state(graph, [], {(dis, loc):1 for loc in nodes_with_locker_locations for dis in population_per_node}, filename=pictures_folder + f"/NEs_analysis_{solution_method}_NOLOCKERS.pdf", show=False)
+    # if folder_to_work:
+    #     pkl_files = [f for f in os.listdir(folder_to_work) if '.pkl' in f]
+    #     for pkl_file in pkl_files:
+    #         pickle_path = folder_to_work + "/" + pkl_file
+    #         alpha_mean = find_first_float_after_substring(pkl_file, "alpha_mean_")
+    #         alpha = {district : alpha_mean for district in population_per_node}
+    #         beta = find_first_float_after_substring(pkl_file, "beta_")
+    #         utilities = {(district, locker): np.exp(alpha[district] - beta * all_pairs_distances[locker][district]) for district in all_pairs_distances.keys() for locker in nodes_with_locker_locations}
+    #         plot_and_info_from_pickle(graph, pickle_path, utilities, population_per_node, pictures_folder + f"/NEs_pickle_{solution_method}_beta_{beta}_alpha_mean_{alpha_mean}.pdf")
+
+    alpha_ref = {district : np.random.normal(loc = 0, scale = 1.0) for district in population_per_node} #{district : 3 for district in graph.nodes}
     for beta in betas:
         for alpha_mean in alpha_means:
-            # alpha = {district : np.random.normal(loc = alpha_mean, scale = alpha_std) for district in population_per_node} #{district : 3 for district in graph.nodes}
-            alpha = {district : 1 for district in population_per_node} #{district : 3 for district in graph.nodes}
-            print(f"Alpha mean: {alpha_mean}, Beta: {beta}")
-            game_initializer_and_solver(graph, solution_method, location_actions, all_pairs_distances, population_per_node, alpha, beta, locker_cost, number_of_lockers_per_player, max_iterations, find_one_or_return_all, pictures_folder, analysis_folder)
+            for alpha_std in alpha_stds:
+                alpha = {district : alpha_mean + alpha_ref[district] * alpha_std for district in population_per_node} #{district : 3 for district in graph.nodes}
+                print(f"Alpha mean: {alpha_mean}, Beta: {beta}")
+                game_initializer_and_solver(graph, solution_method, location_actions, all_pairs_distances, population_per_node, alpha, beta, locker_cost, number_of_lockers_per_player, max_iterations, find_one_or_return_all, pictures_folder, analysis_folder)
