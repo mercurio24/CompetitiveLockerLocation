@@ -1270,8 +1270,6 @@ if __name__ == """__main__""":
 
     # Get the directory name of the current file
     current_file_path = os.path.abspath(__file__)
-    if current_file_path == 'c:/Users/20214095/AppData/Local/Temp/Mxt235/RemoteFiles/592450_2_0/Competitive_location_20241206.py':
-        current_file_path = "c:/Users/20214095/OneDrive - TU Eindhoven/Desktop/PhD material/Competitive_Locker_Location/Code/CompetitiveLockerLocation/NetworkCompetitiveLocation_FromEHVGraph_20241105.py"
     current_folder = os.path.dirname(current_file_path)
     graph_path = os.path.dirname(current_folder) + "/CompLLG_data/eindhoven_with_districts_Binnenstad_Witte Dame_Bergen.graphml"#"/CompLLG_data/Eindhoven.graphml"#
     playing_style = 'sequential' # 'simultaneous' or 'sequential'
